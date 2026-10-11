@@ -36,35 +36,69 @@ if (config.owners.length === 0 && config.ownerLids.length === 0) {
   console.warn('⚠️  OWNER_NUMBER / OWNER_LID no configurados.');
 }
 
-const COMMANDS_HELP = `🤖 *Athena Bot* — Comandos disponibles:
+/* ============================================================
+ *  AYUDA — organizada por categorías
+ * ============================================================ */
 
-📅 *Académico*
-!hoy → Clases de hoy con temas
-!mañana → Clases de mañana
-!semana → Semana completa
+const HELP_FULL = `🤖 *Athena Bot — Comandos*
+
+📚 *CLASES Y HORARIO*
+!hoy (o !h) → Clases de hoy
+!mañana (o !m) → Clases de mañana
+!semana (o !s) → Semana completa
 !próxima → Siguiente clase
 !tema → Temas de la semana actual
 
-📊 *Sistema*
+🌤️ *CLIMA*
+!clima (o !c) → Clima hoy y mañana
+(clima completo: mañana, mediodía, tarde, noche)
+
+📊 *SISTEMA*
+!stats → Estadísticas + progreso
 !ping → Estado de los 4 LLMs
-!stats → Estadísticas + progreso de estudio
 !reset → Borra historial
 !help → Esta ayuda
+!ayuda-rapida → Solo los comandos básicos
 
-🎤 *Audio*
-Envía una nota de voz → la transcribo y respondo en texto
-!voz <texto> → Fuerza respuesta en audio
-!texto <texto> → Fuerza respuesta en texto
-💡 Para recibir respuesta en audio: di "respóndeme en audio" en tu mensaje
+🎤 *AUDIO*
+Envía una nota de voz → la transcribo
+!voz <texto> → Forzar respuesta en audio
+!texto <texto> → Forzar respuesta en texto
+💡 Di "respóndeme en audio" para que responda con voz
 
-🖼️ *Imágenes*
-Envía una foto (con o sin caption) → la analizo y respondo
+🖼️ *IMÁGENES*
+Envía una foto (con o sin caption) → la analizo
+Ejemplos: "resuélvelo", "pásalo a texto", "explícame"
 
-💡 También funciona:
-• Escribe "sí estudié" o "no estudié" para responder al recordatorio
-• Forzar proveedor: !groq, !gemini, !nvidia, !openrouter + pregunta`;
+✅ *ESTUDIO*
+"sí estudié" / "no estudié" → Responder al recordatorio
+!stats → Ver tu progreso
 
-// Palabras clave que activan respuesta en voz
+🧪 *DEBUG*
+!test-today → Simula recordatorio 07:00
+!test-midday → Simula clima mediodía
+!test-reminder → Simula recordatorio 19:00
+!test-review → Simula repaso nocturno
+!test-week → Simula vista previa semanal
+
+💡 *Tip*: escribe solo "!" para ver menú rápido.`;
+
+const HELP_SHORT = `🤖 *Comandos básicos* (escribe !help para ver todos)
+
+!hoy / !h → Clases de hoy
+!mañana / !m → Clases de mañana
+!semana / !s → Semana
+!clima / !c → Clima hoy y mañana
+!stats → Tus estadísticas
+!help → Ayuda completa
+
+🎤 Manda audio → lo transcribo
+🖼️ Manda foto → la analizo
+📝 "sí estudié" / "no estudié" → responder`;
+
+/* ============================================================
+ *  Palabras clave que activan respuesta en voz
+ * ============================================================ */
 const VOICE_KEYWORDS = [
   'en audio',
   'en voz',
@@ -92,6 +126,9 @@ const VOICE_KEYWORDS = [
   'hablame',
 ];
 
+/* ============================================================
+ *  HANDLER PRINCIPAL DE MENSAJES
+ * ============================================================ */
 async function handleMessage(sock, msg) {
   const jid = msg.key.remoteJid;
   const pushName = msg.pushName || 'desconocido';
@@ -99,8 +136,6 @@ async function handleMessage(sock, msg) {
   const isAudio = !!msg.message?.audioMessage;
   const isImage = !!msg.message?.imageMessage;
 
-  // Por defecto, responder SIEMPRE en texto
-  // Solo responder en voz si el usuario lo pide explícitamente
   let replyWithVoice = false;
 
   let text =
@@ -134,7 +169,7 @@ async function handleMessage(sock, msg) {
 
       if (cleanText.length < 3) {
         console.log('   ⚠️  Transcripción vacía o muy corta');
-        await sendText(jid, '🤔 Mi amor, no entendí bien tu audio. ¿Me lo repites? 🙏');
+        await sendText(jid, '🤔 Mi amor, no entendí bien tu audio. ¿Me lo repites?');
         return;
       }
 
@@ -163,8 +198,7 @@ async function handleMessage(sock, msg) {
     }
   }
 
-  // ==================== DETECCIÓN DE SOLICITUD DE VOZ ====================
-  // Buscar palabras clave en el texto (funciona tanto con texto como con audio transcrito)
+  // ==================== DETECCIÓN DE VOZ ====================
   const lowerForVoice = text.toLowerCase();
   const userAskedForVoice = VOICE_KEYWORDS.some((kw) => lowerForVoice.includes(kw));
 
@@ -176,6 +210,13 @@ async function handleMessage(sock, msg) {
   console.log(`   Texto: "${text.slice(0, 200)}${text.length > 200 ? '...' : ''}"`);
   const lower = text.trim().toLowerCase();
 
+  // ==================== ATAJOS: ! SOLO ====================
+  if (lower === '!' || lower === '!ayuda-rapida' || lower === '!comandos') {
+    await humanDelay();
+    await sendText(jid, HELP_SHORT);
+    return;
+  }
+
   // ==================== CONFIRMACIONES DE ESTUDIO ====================
   if (['sí estudié', 'si estudie', 'sí', 'si', 'estudié', 'estudie', '✅'].includes(lower)) {
     const pending = await getPendingStudyConfirmation(jid);
@@ -183,7 +224,7 @@ async function handleMessage(sock, msg) {
       await answerStudyConfirmation(pending.id, true);
       const stats = await getStudyStats(jid, 30);
       await humanDelay();
-      await sendText(jid, `💪 ¡Ese es mi Werner! Anotado. Llevas *${stats.studied}/${stats.total}* días estudiando en los últimos 30. ¡Sigue así, mi amor! 💙`);
+      await sendText(jid, `💪 ¡Ese es mi Werner! Anotado. Llevas *${stats.studied}/${stats.total}* días estudiando en los últimos 30. ¡Sigue así, mi amor!`);
       return;
     }
   }
@@ -193,7 +234,7 @@ async function handleMessage(sock, msg) {
     if (pending) {
       await answerStudyConfirmation(pending.id, false);
       await humanDelay();
-      await sendText(jid, `😅 Bueno, mi amor, aún tienes tiempo. Mañana te recuerdo otra vez. No te agobies 💙`);
+      await sendText(jid, `😅 Bueno, mi amor, aún tienes tiempo. Mañana te recuerdo otra vez. No te agobies.`);
       return;
     }
   }
@@ -222,15 +263,15 @@ async function handleMessage(sock, msg) {
   if (lower.startsWith('!texto ')) {
     text = text.slice(7).trim();
     forceTextReply = true;
-    replyWithVoice = false; // forzar texto
+    replyWithVoice = false;
   }
 
-  // ==================== COMANDOS ====================
+  // ==================== SISTEMA ====================
   if (lower === '!ping') { await handlePing(jid); return; }
 
-  if (lower === '!help' || lower === '!ayuda' || lower === '!comandos') {
+  if (lower === '!help' || lower === '!ayuda') {
     await humanDelay();
-    await sendText(jid, COMMANDS_HELP);
+    await sendText(jid, HELP_FULL);
     return;
   }
 
@@ -254,20 +295,8 @@ async function handleMessage(sock, msg) {
     return;
   }
 
-  if (lower === '!tema') {
-    await humanDelay();
-    const week = getCurrentWeek();
-    const courses = ['contabilidad-financieras','comprension-ingles','solucion-problemas','analisis-eeff','auditoria','finanzas-privadas'];
-    const lines = [`📚 *Temas de la semana ${week}*\n`];
-    for (const key of courses) {
-      const t = getTopicForWeek(key, week);
-      if (t) { lines.push(`*${t.courseName}*`); lines.push(`📖 ${t.topic}\n`); }
-    }
-    await sendText(jid, lines.join('\n'));
-    return;
-  }
-
-  if (lower === '!hoy') {
+  // ==================== CLASES Y HORARIO ====================
+  if (lower === '!hoy' || lower === '!h') {
     await humanDelay();
     const classes = getToday();
     if (classes.length === 0) { await sendText(jid, '🎉 Hoy no tienes clases, corazón. ¡Descansa!'); }
@@ -284,7 +313,7 @@ async function handleMessage(sock, msg) {
     return;
   }
 
-  if (lower === '!mañana' || lower === '!manana') {
+  if (lower === '!mañana' || lower === '!manana' || lower === '!m') {
     await humanDelay();
     const classes = getTomorrow();
     if (classes.length === 0) { await sendText(jid, '🎉 Mañana no tienes clases, mi amor.'); }
@@ -301,7 +330,7 @@ async function handleMessage(sock, msg) {
     return;
   }
 
-  if (lower === '!semana') {
+  if (lower === '!semana' || lower === '!s') {
     await humanDelay();
     const week = getWeek();
     const lines = week.map((d) => {
@@ -324,19 +353,74 @@ async function handleMessage(sock, msg) {
     return;
   }
 
+  if (lower === '!tema') {
+    await humanDelay();
+    const week = getCurrentWeek();
+    const courses = ['contabilidad-financieras','comprension-ingles','solucion-problemas','analisis-eeff','auditoria','finanzas-privadas'];
+    const lines = [`📚 *Temas de la semana ${week}*\n`];
+    for (const key of courses) {
+      const t = getTopicForWeek(key, week);
+      if (t) { lines.push(`*${t.courseName}*`); lines.push(`📖 ${t.topic}\n`); }
+    }
+    await sendText(jid, lines.join('\n'));
+    return;
+  }
+
+  // ==================== CLIMA ====================
+  if (lower === '!clima' || lower === '!c') {
+    await humanDelay();
+    try {
+      const { getWeather, formatWeatherMorning, formatWeatherMidday, formatWeatherEvening } = await import('./services/weather/forecast.js');
+      const w = await getWeather();
+      if (!w) {
+        await sendText(jid, '❌ No pude obtener el clima, mi amor. Intenta en un rato.');
+        return;
+      }
+      const msg = [
+        formatWeatherMorning(w),
+        '',
+        formatWeatherMidday(w),
+        '',
+        formatWeatherEvening(w),
+      ].join('\n');
+      await sendText(jid, msg);
+    } catch (err) {
+      console.error('Error clima:', err.message);
+      await sendText(jid, '❌ Hubo un problema con el clima, corazón.');
+    }
+    return;
+  }
+
+  // ==================== DEBUG / TESTS ====================
+  if (lower === '!test-today') {
+    await humanDelay();
+    await sendText(jid, '⏳ Simulando recordatorio 07:00...');
+    const { reminderToday } = await import('./cron/reminders.js');
+    await reminderToday();
+    return;
+  }
+
+  if (lower === '!test-midday') {
+    await humanDelay();
+    await sendText(jid, '⏳ Simulando clima mediodía...');
+    const { middayWeather } = await import('./cron/reminders.js');
+    await middayWeather();
+    return;
+  }
+
   if (lower === '!test-reminder') {
     await humanDelay();
-    await sendText(jid, '⏳ Simulando recordatorio...');
+    await sendText(jid, '⏳ Simulando recordatorio 19:00...');
     const { reminderTomorrow } = await import('./cron/reminders.js');
     await reminderTomorrow();
     return;
   }
 
-  if (lower === '!test-today') {
+  if (lower === '!test-review') {
     await humanDelay();
-    await sendText(jid, '⏳ Simulando recordatorio de hoy...');
-    const { reminderToday } = await import('./cron/reminders.js');
-    await reminderToday();
+    await sendText(jid, '⏳ Simulando repaso nocturno...');
+    const { eveningReview } = await import('./cron/reminders.js');
+    await eveningReview();
     return;
   }
 
@@ -381,7 +465,7 @@ async function handleMessage(sock, msg) {
 
     if (shouldReplyWithVoice) {
       try {
-        console.log('   🔊 Generando respuesta en voz (solicitado por usuario)...');
+        console.log('   🔊 Generando respuesta en voz...');
         const audioBuffer = await textToSpeech(result.text);
         await sendAudio(jid, audioBuffer);
         console.log(`   ✅ Enviado (voz, ${(audioBuffer.length / 1024).toFixed(1)} KB)`);
@@ -414,6 +498,9 @@ async function handlePing(jid) {
   await sendText(jid, lines.join('\n'));
 }
 
+/* ============================================================
+ *  SERVIDOR HTTP (healthcheck para Render y UptimeRobot)
+ * ============================================================ */
 const PORT = process.env.PORT || 3000;
 const server = createServer((req, res) => {
   if (req.url === '/health') {
@@ -433,6 +520,9 @@ server.listen(PORT, () => {
   console.log(`🌐 Healthcheck HTTP escuchando en puerto ${PORT}`);
 });
 
+/* ============================================================
+ *  ARRANQUE
+ * ============================================================ */
 (async () => {
   try {
     console.log('\n🚀 Iniciando Athena Bot...\n');

@@ -11,7 +11,18 @@ import {
   getTopicForWeek,
   getNextWeekTopics,
 } from '../syllabus/topics.js';
-import { createStudyConfirmation } from '../memory/store.js';
+import {
+  createStudyConfirmation,
+  getPendingTasks,
+  getRecentMessages,
+} from '../memory/store.js';
+import {
+  getWeather,
+  formatWeatherMorning,
+  formatWeatherMidday,
+  formatWeatherEvening,
+  formatWeatherTomorrow,
+} from '../services/weather/forecast.js';
 
 const DAYS_ES = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 
@@ -40,46 +51,124 @@ function tomorrowISO() {
   return d.toISOString().slice(0, 10);
 }
 
-/**
- * 19:00 — Recordatorio de mañana con tema + pregunta de confirmación
- */
+/* ============================================================
+ *  07:00 — Clima mañana + clases del día
+ * ============================================================ */
+async function reminderToday() {
+  console.log('\n☀️ [CRON] Recordatorio de hoy (07:00)');
+
+  const today = new Date();
+  const dayName = DAYS_ES[today.getDay()];
+  const classes = getToday();
+
+  const weather = await getWeather();
+  const weatherMorning = formatWeatherMorning(weather);
+
+  const lines = [`☀️ *Buenos días, mi amor*\n`];
+
+  if (weatherMorning) {
+    lines.push(weatherMorning);
+    lines.push('');
+  }
+
+  if (classes.length === 0) {
+    lines.push(`Hoy ${dayName} no tienes clases. ¡Descansa!`);
+  } else {
+    lines.push(`📚 *Tus clases de hoy:*\n`);
+
+    const week = getCurrentWeek();
+    for (const c of classes) {
+      lines.push(`⏰ ${c.start} - ${c.end}`);
+      lines.push(`📖 ${c.course.name}`);
+      lines.push(`👨‍🏫 ${c.course.teacher}`);
+
+      const topic = getTopicForWeek(c.courseKey, week);
+      if (topic) {
+        lines.push(`📌 SEM-${String(week).padStart(2, '0')}: ${topic.topic}`);
+      }
+      lines.push('');
+    }
+
+    lines.push('¡Mucho éxito hoy, corazón! 💪');
+  }
+
+  await broadcast(lines.join('\n'));
+}
+
+/* ============================================================
+ *  12:00 — Clima mediodía + tarde
+ * ============================================================ */
+async function middayWeather() {
+  console.log('\n🌤️ [CRON] Clima mediodía (12:00)');
+
+  const weather = await getWeather();
+  const weatherMidday = formatWeatherMidday(weather);
+
+  if (!weatherMidday) {
+    console.log('   Sin datos de clima, saltando');
+    return;
+  }
+
+  const lines = [
+    `🌤️ *Clima de mediodía*`,
+    '',
+    weatherMidday,
+    '',
+    'Cuídate del sol si sales, mi amor 😎',
+  ];
+
+  await broadcast(lines.join('\n'));
+}
+
+/* ============================================================
+ *  19:00 — Clima noche + mañana + clases mañana + pregunta
+ * ============================================================ */
 async function reminderTomorrow() {
-  console.log('\n⏰ [CRON] Recordatorio de mañana (19:00)');
+  console.log('\n🌙 [CRON] Recordatorio de mañana (19:00)');
 
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
   const dayName = DAYS_ES[tomorrow.getDay()];
   const classes = getTomorrow();
 
+  const weather = await getWeather();
+  const weatherEvening = formatWeatherEvening(weather);
+
+  const lines = [`🌙 *Recordatorio para mañana* (${dayName})\n`];
+
+  if (weatherEvening) {
+    lines.push(weatherEvening);
+    lines.push('');
+  }
+
   if (classes.length === 0) {
-    await broadcast(
-      `🌙 Buenas noches, mi amor.\n\nMañana ${dayName} no tienes clases. Descansa mucho 😴💙`
-    );
+    lines.push(`Mañana no tienes clases. Descansa 😴`);
+    await broadcast(lines.join('\n'));
     return;
   }
 
+  lines.push(`📚 *Tus clases de mañana:*\n`);
+
   const week = getCurrentWeek() + 1;
-  const lines = [`🌙 *Recordatorio para mañana* (${dayName})\n`];
   const toConfirm = [];
 
   for (const c of classes) {
     lines.push(`⏰ ${c.start} - ${c.end}`);
-    lines.push(`📚 *${c.course.name}*`);
+    lines.push(`📖 ${c.course.name}`);
 
     const topic = getTopicForWeek(c.courseKey, week);
     if (topic) {
-      lines.push(`📖 SEM-${String(week).padStart(2, '0')}: ${topic.topic}`);
+      lines.push(`📌 SEM-${String(week).padStart(2, '0')}: ${topic.topic}`);
       toConfirm.push({ courseKey: c.courseKey, courseName: c.course.name });
     }
 
     lines.push('');
   }
 
-  lines.push('¿Ya repasaste algo para mañana, mi amor? 💙');
+  lines.push('¿Ya repasaste algo para mañana, mi amor?');
   lines.push('✅ *sí estudié*');
   lines.push('❌ *no estudié*');
 
-  // Registrar la pregunta para cada curso (AHORA con await)
   for (const owner of config.owners) {
     for (const tc of toConfirm) {
       try {
@@ -93,50 +182,86 @@ async function reminderTomorrow() {
   await broadcast(lines.join('\n'));
 }
 
-/**
- * 07:00 — Clases del día
- */
-async function reminderToday() {
-  console.log('\n☀️ [CRON] Recordatorio de hoy (07:00)');
+/* ============================================================
+ *  20:30 — Repaso nocturno
+ * ============================================================ */
+async function eveningReview() {
+  console.log('\n🌜 [CRON] Repaso nocturno (20:30)');
 
   const today = new Date();
-  const dayName = DAYS_ES[today.getDay()];
-  const classes = getToday();
+  const weather = await getWeather();
+  const weatherTomorrow = formatWeatherTomorrow(weather);
+  const classesTomorrow = getTomorrow();
+  const week = getCurrentWeek() + 1;
 
-  if (classes.length === 0) {
-    // No enviar si es fin de semana (para no spamear)
-    if (today.getDay() === 0 || today.getDay() === 6) {
-      console.log('   Es fin de semana, saltando recordatorio matutino');
-      return;
+  const lines = [`🌜 *Repaso del día*\n`];
+
+  // 1. Resumen de lo que hablaste hoy
+  try {
+    const lastMessages = await getRecentMessages(config.owners[0], 30);
+    const userMessages = lastMessages
+      .filter((m) => m.role === 'user')
+      .map((m) => m.content)
+      .slice(-15);
+
+    if (userMessages.length > 0) {
+      lines.push(`📝 *Hoy hablamos de:*`);
+      for (const msg of userMessages.slice(-5)) {
+        const clean = msg.replace(/\s+/g, ' ').trim();
+        const short = clean.length > 100 ? clean.slice(0, 100) + '...' : clean;
+        lines.push(`• ${short}`);
+      }
+      lines.push('');
     }
-    await broadcast(`☀️ Buenos días, mi amor.\n\nHoy ${dayName} no tienes clases. ¡Disfruta el día! 😊💙`);
-    return;
+  } catch (err) {
+    console.error('Error obteniendo resumen:', err.message);
   }
 
-  const week = getCurrentWeek();
-  const lines = [`☀️ *Buenos días, mi amor*\n`, `Hoy es ${dayName} y tienes:\n`];
-
-  for (const c of classes) {
-    lines.push(`⏰ ${c.start} - ${c.end}`);
-    lines.push(`📚 *${c.course.name}*`);
-    lines.push(`👨‍🏫 ${c.course.teacher}`);
-
-    const topic = getTopicForWeek(c.courseKey, week);
-    if (topic) {
-      lines.push(`📖 SEM-${String(week).padStart(2, '0')}: ${topic.topic}`);
+  // 2. Tareas pendientes
+  try {
+    const pendingTasks = await getPendingTasks(config.owners[0]);
+    if (pendingTasks.length > 0) {
+      lines.push(`📋 *Tienes ${pendingTasks.length} tarea(s) pendiente(s):*`);
+      for (const task of pendingTasks.slice(0, 5)) {
+        const due = task.due_date ? ` (vence: ${task.due_date})` : '';
+        lines.push(`• ${task.title}${due}`);
+      }
+      lines.push('');
     }
+  } catch (err) {
+    console.error('Error obteniendo tareas:', err.message);
+  }
 
+  // 3. Clima de mañana
+  if (weatherTomorrow) {
+    lines.push(weatherTomorrow);
     lines.push('');
   }
 
-  lines.push('¡Mucho éxito hoy, corazón! 💪💙');
+  // 4. Clases de mañana
+  if (classesTomorrow.length > 0) {
+    lines.push(`📚 *Mañana (${DAYS_ES[(today.getDay() + 1) % 7]}):*`);
+    for (const c of classesTomorrow) {
+      const topic = getTopicForWeek(c.courseKey, week);
+      lines.push(`⏰ ${c.start} ${c.course.short}`);
+      if (topic) {
+        lines.push(`📌 ${topic.topic}`);
+      }
+    }
+    lines.push('');
+  } else {
+    lines.push(`📚 Mañana no tienes clases.`);
+    lines.push('');
+  }
+
+  lines.push('Que descanses, mi amor 😴');
 
   await broadcast(lines.join('\n'));
 }
 
-/**
- * Domingo 19:00 — Vista previa de la semana
- */
+/* ============================================================
+ *  Domingo 19:00 — Vista previa de la semana
+ * ============================================================ */
 async function reminderWeeklyPreview() {
   console.log('\n📅 [CRON] Vista previa semanal (domingo 19:00)');
 
@@ -152,14 +277,14 @@ async function reminderWeeklyPreview() {
     lines.push(`📖 ${c.topic}\n`);
   }
 
-  lines.push('💡 Buen momento para adelantar estudio este domingo, mi amor. ¡Vamos con todo! 💙');
+  lines.push('💡 Buen momento para adelantar estudio este domingo, mi amor. ¡Vamos con todo!');
 
   await broadcast(lines.join('\n'));
 }
 
-/**
- * Self-ping cada 10 min para evitar que Render duerma el servicio.
- */
+/* ============================================================
+ *  Self-ping anti-dormir Render
+ * ============================================================ */
 function startSelfPing() {
   const PORT = process.env.PORT || 3000;
   const ping = () => {
@@ -173,33 +298,37 @@ function startSelfPing() {
     req.on('timeout', () => req.destroy());
   };
 
-  setInterval(ping, 10 * 60 * 1000); // cada 10 min
+  setInterval(ping, 10 * 60 * 1000);
   console.log('🔄 Self-ping activo cada 10 min');
 }
 
+/* ============================================================
+ *  Arranque de todos los cron jobs
+ * ============================================================ */
 export function startCronJobs() {
-  // Todos los días a las 19:00 hora Perú
-  cron.schedule('0 19 * * *', reminderTomorrow, {
-    timezone: 'America/Lima',
-  });
+  // 07:00 diario → clima mañana + clases
+  cron.schedule('0 7 * * *', reminderToday, { timezone: 'America/Lima' });
 
-  // Todos los días a las 07:00 hora Perú
-  cron.schedule('0 7 * * *', reminderToday, {
-    timezone: 'America/Lima',
-  });
+  // 12:00 diario → clima mediodía + tarde
+  cron.schedule('0 12 * * *', middayWeather, { timezone: 'America/Lima' });
 
-  // Domingos a las 19:00 — resumen semanal
-  cron.schedule('0 19 * * 0', reminderWeeklyPreview, {
-    timezone: 'America/Lima',
-  });
+  // 19:00 diario → clima noche + mañana + clases mañana + pregunta
+  cron.schedule('0 19 * * *', reminderTomorrow, { timezone: 'America/Lima' });
+
+  // 20:30 diario → repaso nocturno
+  cron.schedule('30 20 * * *', eveningReview, { timezone: 'America/Lima' });
+
+  // Domingo 19:00 → vista previa semanal
+  cron.schedule('0 19 * * 0', reminderWeeklyPreview, { timezone: 'America/Lima' });
 
   console.log('⏰ Cron jobs activos:');
-  console.log('   • 19:00 diario → recordatorio de mañana + pregunta');
-  console.log('   • 07:00 diario → clases de hoy');
+  console.log('   • 07:00 diario → clima mañana + clases del día');
+  console.log('   • 12:00 diario → clima mediodía + tarde');
+  console.log('   • 19:00 diario → clima noche + mañana + clases mañana');
+  console.log('   • 20:30 diario → repaso nocturno');
   console.log('   • Domingo 19:00 → vista previa semanal');
 
   startSelfPing();
 }
 
-// Exportar para testing manual
-export { reminderTomorrow, reminderToday, reminderWeeklyPreview };
+export { reminderTomorrow, reminderToday, reminderWeeklyPreview, eveningReview, middayWeather };
