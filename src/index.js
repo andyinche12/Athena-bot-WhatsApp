@@ -240,3 +240,26 @@ process.on('SIGINT', () => {
   console.log('\n👋 Cerrando Athena Bot...');
   process.exit(0);
 });
+
+// --- Servidor HTTP mínimo para healthcheck (Render + UptimeRobot) ---
+import { createServer } from 'http';
+
+const PORT = process.env.PORT || 3000;
+const server = createServer((req, res) => {
+  if (req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      status: 'ok',
+      service: 'athena-bot-whatsapp',
+      uptime: process.uptime(),
+      timestamp: new Date().toISOString(),
+    }));
+  } else {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Athena Bot WhatsApp — en línea');
+  }
+});
+
+server.listen(PORT, () => {
+  console.log(`🌐 Healthcheck HTTP escuchando en puerto ${PORT}`);
+});

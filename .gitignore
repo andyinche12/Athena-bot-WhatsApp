@@ -1,18 +1,18 @@
 # Dependencias
 node_modules/
-package-lock.json
-
-# Sesión de WhatsApp (¡CRÍTICO! Nunca subir esto)
-data/session/
-data/*.db
-data/*.db-journal
 
 # Variables de entorno
 .env
 .env.local
 
-# Logs
-logs/*.log
+# Sesión de WhatsApp (¡CRÍTICO! Nunca subir esto)
+data/session/
+
+# Base de datos SQLite (archivos temporales)
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.db-journal
 
 # Sistema
 .DS_Store
@@ -22,7 +22,13 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Logs
+logs/*.log
+
 # Temporales
 dist/
 build/
 *.tmp
+
+# Render
+.env.render
