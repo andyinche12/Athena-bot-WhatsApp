@@ -88,6 +88,10 @@ export async function startWhatsApp(onMessage) {
 
     console.log('🔔 [DEBUG] Listener messages.upsert registrado');
 
+    // 🛡️ Anti-duplicado: Set en memoria de IDs ya procesados
+    const processedIds = new Set();
+    const MAX_CACHE = 500;
+
     sock.ev.on('messages.upsert', async (event) => {
       const { messages, type } = event;
       console.log(`\n🔔 [DEBUG] messages.upsert | type=${type} | count=${messages?.length || 0}`);
@@ -95,21 +99,43 @@ export async function startWhatsApp(onMessage) {
       if (!messages || messages.length === 0) return;
 
       for (const msg of messages) {
+        const msgId = msg.key?.id;
         const fromJid = msg.key?.remoteJid || 'desconocido';
         const fromMe = msg.key?.fromMe;
         const hasMessage = !!msg.message;
         const msgKeys = msg.message ? Object.keys(msg.message).join(',') : 'nada';
 
-        console.log(`   📨 De: ${fromJid} | fromMe: ${fromMe} | contenido: [${msgKeys}]`);
+        console.log(`   📨 De: ${fromJid} | fromMe: ${fromMe} | id: ${msgId} | contenido: [${msgKeys}]`);
 
+        // Ignorar si no tiene contenido
         if (!hasMessage) continue;
+
+        // Ignorar mensajes propios
         if (fromMe) {
           console.log('   ⏭️  Ignorado (es propio)');
           continue;
         }
+
+        // Ignorar grupos
         if (fromJid.endsWith('@g.us')) {
           console.log('   ⏭️  Ignorado (es grupo)');
           continue;
+        }
+
+        // 🛡️ Anti-duplicado: ignorar mensajes ya procesados
+        if (msgId && processedIds.has(msgId)) {
+          console.log('   ⏭️  Ignorado (ya procesado antes)');
+          continue;
+        }
+
+        // Marcar como procesado
+        if (msgId) {
+          processedIds.add(msgId);
+          // Limitar tamaño del Set (evitar crecer indefinidamente)
+          if (processedIds.size > MAX_CACHE) {
+            const first = processedIds.values().next().value;
+            processedIds.delete(first);
+          }
         }
 
         try {
