@@ -1,6 +1,6 @@
 import { config, isOwner, humanDelay } from './config/env.js';
 import { SYSTEM_PROMPT } from './config/persona.js';
-import { startWhatsApp, sendText } from './services/whatsapp/client.js';
+import { startWhatsApp, sendText, sendAudio } from './services/whatsapp/client.js';
 import { askLLM, pingProvider, PROVIDERS_AVAILABLE } from './services/llm/router.js';
 import {
   saveMessage,
@@ -20,6 +20,7 @@ import {
 import { getCurrentWeek, getTopicForWeek } from './syllabus/topics.js';
 import { startCronJobs } from './cron/reminders.js';
 import { transcribeAudioMessage } from './services/audio/transcribe.js';
+import { textToSpeech } from './services/audio/tts.js';
 import { analyzeImageMessage } from './services/vision/analyze.js';
 import { createServer } from 'http';
 
@@ -51,13 +52,10 @@ const COMMANDS_HELP = `🤖 *Athena Bot* — Comandos disponibles:
 !reset → Borra historial
 !help → Esta ayuda
 
-🧪 *Debug*
-!test-reminder → Simula recordatorio 19:00
-!test-today → Simula recordatorio 07:00
-!test-week → Simula vista previa dominical
-
 🎤 *Audio*
-Envía una nota de voz → la transcribo automáticamente
+Envía una nota de voz → la transcribo y respondo con voz
+!voz <texto> → Fuerza respuesta en audio
+!texto <texto> → Fuerza respuesta en texto
 
 🖼️ *Imágenes*
 Envía una foto (con o sin caption) → la analizo y respondo
@@ -65,7 +63,11 @@ Ejemplos de captions:
   • "resuélvelo"
   • "pásalo a texto"
   • "explícame esto"
-  • "hazme un resumen de estudio"
+
+🧪 *Debug*
+!test-reminder → Simula recordatorio 19:00
+!test-today → Simula recordatorio 07:00
+!test-week → Simula vista previa dominical
 
 💡 También funciona:
 • Escribe "sí estudié" o "no estudié" para responder al recordatorio
@@ -76,8 +78,12 @@ async function handleMessage(sock, msg) {
   const jid = msg.key.remoteJid;
   const pushName = msg.pushName || 'desconocido';
 
+  // Detectar tipo de mensaje multimedia
   const isAudio = !!msg.message?.audioMessage;
   const isImage = !!msg.message?.imageMessage;
+
+  // Recordar si el mensaje entrante fue audio → responder con audio
+  const replyWithVoice = isAudio;
 
   let text =
     msg.message?.conversation ||
@@ -166,6 +172,36 @@ async function handleMessage(sock, msg) {
       await sendText(jid, `😅 Bueno, aún tienes tiempo. Mañana te recuerdo de nuevo.`);
       return;
     }
+  }
+
+  // ==================== COMANDOS DE VOZ ====================
+
+  // !voz <texto> → forzar respuesta en audio
+  if (lower.startsWith('!voz ')) {
+    const textToSay = text.slice(5).trim();
+    if (!textToSay) {
+      await sendText(jid, '❌ Uso: `!voz <texto que quieres que diga>`');
+      return;
+    }
+    try {
+      await humanDelay();
+      const audioBuffer = await textToSpeech(textToSay);
+      await sendAudio(jid, audioBuffer);
+      console.log(`   🔊 Audio enviado (${(audioBuffer.length / 1024).toFixed(1)} KB)`);
+    } catch (err) {
+      console.error('❌ Error generando voz:', err.message);
+      await sendText(jid, `❌ No pude generar el audio: ${err.message.slice(0, 100)}`);
+    }
+    return;
+  }
+
+  // !texto <texto> → forzar respuesta en texto
+  // (reemplaza el texto actual y continúa el flujo normal sin replyWithVoice)
+  let forceTextReply = false;
+  if (lower.startsWith('!texto ')) {
+    text = text.slice(7).trim();
+    forceTextReply = true;
+    console.log(`   📝 Modo texto forzado: "${text.slice(0, 80)}..."`);
   }
 
   // ==================== COMANDOS ====================
@@ -315,8 +351,30 @@ async function handleMessage(sock, msg) {
     saveMessage(jid, 'assistant', result.text, { provider: result.provider, model: result.model });
 
     await humanDelay();
-    await sendText(jid, result.text);
-    console.log(`   ✅ Enviado a WhatsApp`);
+
+    // Decidir si responder con voz o texto
+    // Voz si: el usuario envió audio, no forzó texto, y la respuesta no es muy larga
+    const shouldReplyWithVoice =
+      replyWithVoice &&
+      !forceTextReply &&
+      result.text.length <= 500 &&
+      !result.text.includes('```'); // evitar audios con bloques de código
+
+    if (shouldReplyWithVoice) {
+      try {
+        console.log('   🔊 Generando respuesta en voz...');
+        const audioBuffer = await textToSpeech(result.text);
+        await sendAudio(jid, audioBuffer);
+        console.log(`   ✅ Enviado a WhatsApp (voz, ${(audioBuffer.length / 1024).toFixed(1)} KB)`);
+      } catch (err) {
+        console.error('❌ Falló TTS, enviando como texto:', err.message);
+        await sendText(jid, result.text);
+        console.log(`   ✅ Enviado a WhatsApp (texto fallback)`);
+      }
+    } else {
+      await sendText(jid, result.text);
+      console.log(`   ✅ Enviado a WhatsApp (texto)`);
+    }
   } catch (err) {
     console.error('❌ Error LLM:', err.message);
     await humanDelay();

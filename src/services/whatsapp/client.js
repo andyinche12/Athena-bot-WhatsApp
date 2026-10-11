@@ -159,9 +159,30 @@ export async function startWhatsApp(onMessage) {
   }
 }
 
+/**
+ * Envía un mensaje de texto a un JID.
+ */
 export async function sendText(jid, text) {
   if (!sock) throw new Error('Cliente WhatsApp no inicializado');
   return sock.sendMessage(jid, { text });
+}
+
+/**
+ * Envía una nota de voz (PTT) por WhatsApp.
+ * @param {string} jid - Destinatario
+ * @param {Buffer} audioBuffer - Buffer del audio en OGG/Opus
+ */
+export async function sendAudio(jid, audioBuffer) {
+  if (!sock) throw new Error('Cliente WhatsApp no inicializado');
+  if (!audioBuffer || audioBuffer.length === 0) {
+    throw new Error('Buffer de audio vacío');
+  }
+
+  return sock.sendMessage(jid, {
+    audio: audioBuffer,
+    mimetype: 'audio/ogg; codecs=opus',
+    ptt: true, // Push-to-talk = nota de voz
+  });
 }
 
 export function getSocket() {
