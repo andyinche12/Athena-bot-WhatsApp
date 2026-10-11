@@ -2,63 +2,94 @@ import { createClient } from '@supabase/supabase-js';
 import { BufferJSON, initAuthCreds } from '@whiskeysockets/baileys';
 import { config } from '../../config/env.js';
 
-const supabase = createClient(config.supabaseUrl, config.supabaseAnonKey);
+const supabase = createClient(
+  config.supabaseUrl,
+  config.supabaseAnonKey,
+  {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  }
+);
+
+// Timeout para operaciones de red
+const NETWORK_TIMEOUT_MS = 8000;
+// Reintentos para lecturas críticas
+const READ_RETRIES = 3;
 
 /**
- * Auth state de Baileys con Supabase.
- * Usa batch upsert para evitar rate limiting.
- * Solo loguea categorías importantes (evita spam de lid-mapping).
+ * Envuelve una promesa con timeout.
  */
+function withTimeout(promise, ms, label = 'operación') {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`TIMEOUT en ${label} (${ms}ms)`)), ms)
+    ),
+  ]);
+}
+
 export async function useSupabaseAuthState() {
-  // Variable externa para controlar el log silencioso de saveCreds
   let lastSaveLog = 0;
 
-  // ----- Leer una key -----
-  const readData = async (key) => {
+  // ----- Leer una key con reintentos -----
+  const readData = async (key, attempt = 1) => {
     try {
-      const { data, error } = await supabase
-        .from('baileys_auth')
-        .select('data')
-        .eq('id', key)
-        .maybeSingle();
+      const { data, error } = await withTimeout(
+        supabase
+          .from('baileys_auth')
+          .select('data')
+          .eq('id', key)
+          .maybeSingle(),
+        NETWORK_TIMEOUT_MS,
+        `readData(${key})`
+      );
 
-      if (error) {
-        console.error(`Error leyendo ${key}:`, error.message);
-        return null;
-      }
+      if (error) throw new Error(error.message);
       if (!data) return null;
 
       return JSON.parse(JSON.stringify(data.data), BufferJSON.reviver);
     } catch (err) {
-      console.error(`Fetch error leyendo ${key}:`, err.message);
-      return null;
+      console.error(`   ⚠️  readData(${key}) intento ${attempt} falló:`, err.message);
+
+      if (attempt < READ_RETRIES) {
+        // Backoff exponencial: 500ms, 1000ms
+        await new Promise((r) => setTimeout(r, attempt * 500));
+        return readData(key, attempt + 1);
+      }
+
+      // Falló todos los intentos → LANZAR error (NO devolver null)
+      throw new Error(`readData(${key}) falló después de ${READ_RETRIES} intentos: ${err.message}`);
     }
   };
 
-  // ----- Escribir UNA key con reintentos -----
+  // ----- Escribir una key con reintentos -----
   const writeSingle = async (key, value, attempt = 1) => {
     try {
       const serialized = JSON.parse(JSON.stringify(value, BufferJSON.replacer));
-      const { error } = await supabase
-        .from('baileys_auth')
-        .upsert(
-          { id: key, data: serialized, updated_at: new Date().toISOString() },
-          { onConflict: 'id' }
-        );
+      const { error } = await withTimeout(
+        supabase
+          .from('baileys_auth')
+          .upsert(
+            { id: key, data: serialized, updated_at: new Date().toISOString() },
+            { onConflict: 'id' }
+          ),
+        NETWORK_TIMEOUT_MS,
+        `writeSingle(${key})`
+      );
 
       if (error) throw new Error(error.message);
     } catch (err) {
-      console.error(`   ❌ ${key} falló (intento ${attempt}):`, err.message);
-      if (attempt < 3) {
-        const delay = attempt * 500;
-        await new Promise((r) => setTimeout(r, delay));
+      if (attempt < READ_RETRIES) {
+        await new Promise((r) => setTimeout(r, attempt * 500));
         return writeSingle(key, value, attempt + 1);
       }
-      console.error(`   ❌ ${key} → dio up después de 3 intentos`);
+      console.error(`   ❌ writeSingle(${key}) dio up después de ${READ_RETRIES} intentos`);
     }
   };
 
-  // ----- Escribir MUCHAS keys en UN solo request -----
+  // ----- Escribir varias keys en un batch -----
   const writeBatch = async (entries, verbose = false) => {
     if (entries.length === 0) return;
 
@@ -69,16 +100,18 @@ export async function useSupabaseAuthState() {
         updated_at: new Date().toISOString(),
       }));
 
-      const { error, data } = await supabase
-        .from('baileys_auth')
-        .upsert(rows, { onConflict: 'id' })
-        .select('id');
+      const { error, data } = await withTimeout(
+        supabase
+          .from('baileys_auth')
+          .upsert(rows, { onConflict: 'id' })
+          .select('id'),
+        NETWORK_TIMEOUT_MS * 2,
+        `writeBatch(${entries.length} filas)`
+      );
 
       if (error) {
         console.error(`❌ Batch upsert error:`, error.message);
-        console.error(`   Código:`, error.code);
-        console.error(`   Detalle:`, error.details);
-        console.error(`   Hint:`, error.hint);
+        // Fallback: uno por uno
         for (const entry of entries) {
           await writeSingle(entry.key, entry.value);
           await new Promise((r) => setTimeout(r, 100));
@@ -87,8 +120,8 @@ export async function useSupabaseAuthState() {
         console.log(`   ✅ Batch upsert: ${data?.length || entries.length} filas`);
       }
     } catch (err) {
-      console.error(`❌ Batch fetch error:`, err.message);
-      console.error(err.stack);
+      console.error(`❌ Batch falló:`, err.message);
+      // Fallback
       for (const entry of entries) {
         await writeSingle(entry.key, entry.value);
         await new Promise((r) => setTimeout(r, 100));
@@ -99,15 +132,40 @@ export async function useSupabaseAuthState() {
   // ----- Borrar una key -----
   const removeData = async (key) => {
     try {
-      await supabase.from('baileys_auth').delete().eq('id', key);
+      await withTimeout(
+        supabase.from('baileys_auth').delete().eq('id', key),
+        NETWORK_TIMEOUT_MS,
+        `removeData(${key})`
+      );
     } catch (err) {
-      console.error(`Error borrando ${key}:`, err.message);
+      console.error(`   ⚠️  removeData(${key}) falló:`, err.message);
     }
   };
 
-  // ----- Cargar credenciales existentes -----
-  const creds = (await readData('creds')) || initAuthCreds();
-  const credsStatus = creds && creds.me ? 'existentes' : 'nuevos (initAuthCreds)';
+  // ----- Cargar credenciales con lógica segura -----
+  let creds;
+  let credsStatus;
+
+  try {
+    const stored = await readData('creds');
+
+    if (stored) {
+      creds = stored;
+      credsStatus = 'existentes';
+    } else {
+      // No hay creds guardadas → es la primera vez
+      creds = initAuthCreds();
+      credsStatus = 'nuevos (primera vez)';
+    }
+  } catch (err) {
+    // 🔴 ERROR DE RED CRÍTICO: no podemos leer Supabase
+    // NO caemos a initAuthCreds porque eso BORRARÍA la sesión
+    console.error('❌ No se pudo leer creds de Supabase tras reintentos');
+    console.error('   Detalle:', err.message);
+    console.error('   Abortando inicialización para NO perder la sesión.');
+    throw new Error('No se pudo leer la sesión de Supabase. Reintenta en unos segundos.');
+  }
+
   console.log(`🔐 [AuthState] Creds cargados: ${credsStatus}`);
 
   return {
@@ -117,11 +175,17 @@ export async function useSupabaseAuthState() {
         get: async (type, ids) => {
           const data = {};
           for (const id of ids) {
-            let value = await readData(`key-${type}-${id}`);
-            if (type === 'app-state-sync-key' && value) {
-              value = { ...value };
+            try {
+              let value = await readData(`key-${type}-${id}`);
+              if (type === 'app-state-sync-key' && value) {
+                value = { ...value };
+              }
+              data[id] = value;
+            } catch (err) {
+              // Si falla leer una key individual, devolvemos null sin tirar todo
+              console.error(`   ⚠️  keys.get(${type}, ${id}) falló:`, err.message);
+              data[id] = null;
             }
-            data[id] = value;
           }
           return data;
         },
@@ -143,16 +207,9 @@ export async function useSupabaseAuthState() {
 
           const categories = Object.keys(data);
           const importantCategories = [
-            'creds',
-            'session',
-            'pre-key',
-            'sender-key',
-            'sender-key-memory',
-            'app-state-sync-key',
-            'app-state-sync-version',
-            'identity-key',
-            'device-list',
-            'tctoken',
+            'creds', 'session', 'pre-key', 'sender-key', 'sender-key-memory',
+            'app-state-sync-key', 'app-state-sync-version',
+            'identity-key', 'device-list', 'tctoken',
           ];
           const isImportant = categories.some((c) =>
             importantCategories.includes(c)
@@ -175,7 +232,6 @@ export async function useSupabaseAuthState() {
       },
     },
     saveCreds: async () => {
-      // Log silencioso usando variable externa (NO saveCreds._lastLog)
       const now = Date.now();
       if (now - lastSaveLog > 5000) {
         console.log('💾 [saveCreds] Guardando credenciales...');

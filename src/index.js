@@ -10,6 +10,9 @@ import {
   getPendingStudyConfirmation,
   answerStudyConfirmation,
   getStudyStats,
+  createTask,
+  getPendingTasks,
+  completeTask,
 } from './memory/store.js';
 import {
   getToday,
@@ -22,6 +25,13 @@ import { startCronJobs } from './cron/reminders.js';
 import { transcribeAudioMessage } from './services/audio/transcribe.js';
 import { textToSpeech } from './services/audio/tts.js';
 import { analyzeImageMessage } from './services/vision/analyze.js';
+import { parseTaskInput, formatDueDate } from './services/tasks/parser.js';
+import {
+  isInPomodoro,
+  getPomodoro,
+  startPomodoro,
+  stopPomodoro,
+} from './services/pomodoro/manager.js';
 import { createServer } from 'http';
 
 console.log('🤖 Athena Bot — Asistente Académico');
@@ -49,26 +59,36 @@ const HELP_FULL = `🤖 *Athena Bot — Comandos*
 !próxima → Siguiente clase
 !tema → Temas de la semana actual
 
+📝 *TAREAS*
+!tarea <texto> → Guardar tarea
+!tarea <texto> para el viernes → Con fecha
+!pendientes → Ver tareas pendientes
+!completar <n> → Marcar como hecha
+!limpiar-tareas → Borrar todas las completadas
+
+⏱️ *POMODORO*
+!pomodoro → 25 min estudio + 5 descanso × 4 rondas
+!pomodoro 45 10 3 → Custom (45/10 × 3 rondas)
+!pomodoro-estado → Ver sesión activa
+!pomodoro-stop → Cancelar sesión
+
 🌤️ *CLIMA*
 !clima (o !c) → Clima hoy y mañana
-(clima completo: mañana, mediodía, tarde, noche)
 
 📊 *SISTEMA*
 !stats → Estadísticas + progreso
 !ping → Estado de los 4 LLMs
 !reset → Borra historial
 !help → Esta ayuda
-!ayuda-rapida → Solo los comandos básicos
+!ayuda-rapida → Solo comandos básicos
 
 🎤 *AUDIO*
 Envía una nota de voz → la transcribo
 !voz <texto> → Forzar respuesta en audio
 !texto <texto> → Forzar respuesta en texto
-💡 Di "respóndeme en audio" para que responda con voz
 
 🖼️ *IMÁGENES*
 Envía una foto (con o sin caption) → la analizo
-Ejemplos: "resuélvelo", "pásalo a texto", "explícame"
 
 ✅ *ESTUDIO*
 "sí estudié" / "no estudié" → Responder al recordatorio
@@ -79,9 +99,7 @@ Ejemplos: "resuélvelo", "pásalo a texto", "explícame"
 !test-midday → Simula clima mediodía
 !test-reminder → Simula recordatorio 19:00
 !test-review → Simula repaso nocturno
-!test-week → Simula vista previa semanal
-
-💡 *Tip*: escribe solo "!" para ver menú rápido.`;
+!test-week → Simula vista previa semanal`;
 
 const HELP_SHORT = `🤖 *Comandos básicos* (escribe !help para ver todos)
 
@@ -89,45 +107,38 @@ const HELP_SHORT = `🤖 *Comandos básicos* (escribe !help para ver todos)
 !mañana / !m → Clases de mañana
 !semana / !s → Semana
 !clima / !c → Clima hoy y mañana
+
+📝 *Tareas*
+!tarea <texto> → Guardar
+!pendientes → Ver pendientes
+
+⏱️ *Foco*
+!pomodoro → Iniciar 25 min
+
 !stats → Tus estadísticas
 !help → Ayuda completa
 
 🎤 Manda audio → lo transcribo
-🖼️ Manda foto → la analizo
-📝 "sí estudié" / "no estudié" → responder`;
+🖼️ Manda foto → la analizo`;
 
 /* ============================================================
  *  Palabras clave que activan respuesta en voz
  * ============================================================ */
 const VOICE_KEYWORDS = [
-  'en audio',
-  'en voz',
-  'por audio',
-  'por voz',
-  'respóndeme en audio',
-  'respondeme en audio',
-  'respóndeme en voz',
-  'respondeme en voz',
-  'dime en audio',
-  'dime en voz',
-  'contéstame en audio',
-  'contestame en audio',
-  'contéstame en voz',
-  'contestame en voz',
-  'mándame un audio',
-  'mandame un audio',
-  'mándame audio',
-  'mandame audio',
-  'envíame un audio',
-  'enviame un audio',
-  'con tu voz',
-  'en tu voz',
-  'háblame',
-  'hablame',
+  'en audio', 'en voz', 'por audio', 'por voz',
+  'respóndeme en audio', 'respondeme en audio',
+  'respóndeme en voz', 'respondeme en voz',
+  'dime en audio', 'dime en voz',
+  'contéstame en audio', 'contestame en audio',
+  'contéstame en voz', 'contestame en voz',
+  'mándame un audio', 'mandame un audio',
+  'mándame audio', 'mandame audio',
+  'envíame un audio', 'enviame un audio',
+  'con tu voz', 'en tu voz', 'háblame', 'hablame',
 ];
 
 /* ============================================================
- *  HANDLER PRINCIPAL DE MENSAJES
+ *  HANDLER PRINCIPAL
  * ============================================================ */
 async function handleMessage(sock, msg) {
   const jid = msg.key.remoteJid;
@@ -201,7 +212,6 @@ async function handleMessage(sock, msg) {
   // ==================== DETECCIÓN DE VOZ ====================
   const lowerForVoice = text.toLowerCase();
   const userAskedForVoice = VOICE_KEYWORDS.some((kw) => lowerForVoice.includes(kw));
-
   if (userAskedForVoice) {
     replyWithVoice = true;
     console.log('   🔊 Usuario pidió respuesta en audio');
@@ -210,7 +220,7 @@ async function handleMessage(sock, msg) {
   console.log(`   Texto: "${text.slice(0, 200)}${text.length > 200 ? '...' : ''}"`);
   const lower = text.trim().toLowerCase();
 
-  // ==================== ATAJOS: ! SOLO ====================
+  // ==================== ATAJOS ====================
   if (lower === '!' || lower === '!ayuda-rapida' || lower === '!comandos') {
     await humanDelay();
     await sendText(jid, HELP_SHORT);
@@ -266,6 +276,158 @@ async function handleMessage(sock, msg) {
     replyWithVoice = false;
   }
 
+  // ==================== COMANDOS DE TAREAS ====================
+  if (lower.startsWith('!tarea ') || lower.startsWith('!t ')) {
+    const start = lower.startsWith('!tarea ') ? 7 : 3;
+    const input = text.slice(start).trim();
+
+    if (!input) {
+      await sendText(jid, '❌ Uso: `!tarea <texto>`\nEjemplos:\n• !tarea entregar informe de auditoría\n• !tarea estudiar NIA 500 para el viernes');
+      return;
+    }
+
+    const { cleanTitle, dueDate } = parseTaskInput(input);
+
+    if (!cleanTitle) {
+      await sendText(jid, '❌ Necesito un texto para la tarea.');
+      return;
+    }
+
+    try {
+      const id = await createTask(jid, {
+        title: cleanTitle,
+        dueDate,
+      });
+
+      const dueText = dueDate ? `\n📅 Vence: *${formatDueDate(dueDate)}*` : '';
+      const reminderText = dueDate
+        ? '\nTe aviso el día anterior y el mismo día 💙'
+        : '';
+
+      await humanDelay();
+      await sendText(jid, `📝 Anotado (tarea #${id}):\n*${cleanTitle}*${dueText}${reminderText}`);
+    } catch (err) {
+      console.error('Error creando tarea:', err.message);
+      await sendText(jid, '❌ No pude guardar la tarea, mi amor.');
+    }
+    return;
+  }
+
+  if (lower === '!pendientes' || lower === '!tareas' || lower === '!lista') {
+    try {
+      const tasks = await getPendingTasks(jid);
+
+      if (tasks.length === 0) {
+        await humanDelay();
+        await sendText(jid, '✨ No tienes tareas pendientes, mi amor. ¡Sigue así!');
+        return;
+      }
+
+      const lines = [`📋 *Tareas pendientes (${tasks.length})*\n`];
+      for (const t of tasks.slice(0, 15)) {
+        const due = t.due_date ? ` — 📅 ${formatDueDate(t.due_date)}` : '';
+        lines.push(`*#${t.id}* ${t.title}${due}`);
+      }
+      if (tasks.length > 15) {
+        lines.push(`\n_(+${tasks.length - 15} más)_`);
+      }
+      lines.push(`\nCompleta con: !completar <n>`);
+
+      await humanDelay();
+      await sendText(jid, lines.join('\n'));
+    } catch (err) {
+      console.error('Error listando tareas:', err.message);
+      await sendText(jid, '❌ No pude leer tus tareas.');
+    }
+    return;
+  }
+
+  if (lower.startsWith('!completar ') || lower.startsWith('!listo ')) {
+    const start = lower.startsWith('!completar ') ? 11 : 7;
+    const idStr = text.slice(start).trim();
+    const id = parseInt(idStr, 10);
+
+    if (isNaN(id)) {
+      await sendText(jid, '❌ Uso: `!completar <número>`\nEjemplo: !completar 3');
+      return;
+    }
+
+    try {
+      const ok = await completeTask(id);
+      if (ok) {
+        await humanDelay();
+        await sendText(jid, `✅ Tarea #${id} completada. ¡Un paso menos, mi amor! 💙`);
+      } else {
+        await sendText(jid, `❌ No encontré la tarea #${id}.`);
+      }
+    } catch (err) {
+      console.error('Error completando tarea:', err.message);
+      await sendText(jid, '❌ No pude actualizar la tarea.');
+    }
+    return;
+  }
+
+  // ==================== POMODORO ====================
+  if (lower === '!pomodoro' || lower.startsWith('!pomodoro ')) {
+    if (isInPomodoro(jid)) {
+      const current = getPomodoro(jid);
+      await humanDelay();
+      await sendText(jid, `⏱️ Ya tienes una sesión activa.\n\n${current.type === 'work' ? '🔴 Foco' : '☕ Descanso'} · Ronda ${current.currentRound}/${current.totalRounds}\nQuedan ${current.remainingMin} min.\n\nPara cancelar: !pomodoro-stop`);
+      return;
+    }
+
+    // Parsear argumentos custom: !pomodoro 45 10 3
+    const args = text.slice(9).trim().split(/\s+/).filter(Boolean);
+    let work = 25, brk = 5, rounds = 4;
+
+    if (args.length >= 1) {
+      const w = parseInt(args[0], 10);
+      if (!isNaN(w) && w > 0 && w <= 120) work = w;
+    }
+    if (args.length >= 2) {
+      const b = parseInt(args[1], 10);
+      if (!isNaN(b) && b > 0 && b <= 30) brk = b;
+    }
+    if (args.length >= 3) {
+      const r = parseInt(args[2], 10);
+      if (!isNaN(r) && r > 0 && r <= 10) rounds = r;
+    }
+
+    const result = await startPomodoro(jid, work, brk, rounds);
+    if (result.error) {
+      await sendText(jid, `⚠️ ${result.error}`);
+      return;
+    }
+
+    await humanDelay();
+    await sendText(jid, `⏱️ *Pomodoro iniciado*\n\n🔴 Ronda 1/${rounds} — ${work} min de foco\n☕ Descanso: ${brk} min entre rondas\n\nTe aviso cuando termine la ronda. ¡Éxito! 💪`);
+    return;
+  }
+
+  if (lower === '!pomodoro-estado' || lower === '!pomo-estado') {
+    if (!isInPomodoro(jid)) {
+      await sendText(jid, '✨ No tienes una sesión de Pomodoro activa.');
+      return;
+    }
+
+    const s = getPomodoro(jid);
+    await humanDelay();
+    await sendText(jid, `⏱️ *Estado del Pomodoro*\n\n${s.type === 'work' ? '🔴 Foco' : '☕ Descanso'}\nRonda ${s.currentRound}/${s.totalRounds}\nQuedan ~${s.remainingMin} min`);
+    return;
+  }
+
+  if (lower === '!pomodoro-stop' || lower === '!pomo-stop' || lower === '!cancelar-pomodoro') {
+    if (!isInPomodoro(jid)) {
+      await sendText(jid, '✨ No había ninguna sesión activa.');
+      return;
+    }
+
+    stopPomodoro(jid);
+    await humanDelay();
+    await sendText(jid, '🛑 Sesión cancelada. Cuando quieras retomar, usa !pomodoro.');
+    return;
+  }
+
   // ==================== SISTEMA ====================
   if (lower === '!ping') { await handlePing(jid); return; }
 
@@ -279,11 +441,12 @@ async function handleMessage(sock, msg) {
     await humanDelay();
     const s = await getStats(jid);
     const study = await getStudyStats(jid, 30);
+    const tasks = await getPendingTasks(jid);
     await sendText(jid, `📊 *Estadísticas*
 
 💬 Mensajes: ${s.messages}
 🧠 Hechos: ${s.facts}
-📝 Tareas pendientes: ${s.pendingTasks}
+📝 Tareas pendientes: ${tasks.length}
 📚 Estudio (30d): ${study.studied}/${study.total}`);
     return;
   }
@@ -370,20 +533,13 @@ async function handleMessage(sock, msg) {
   if (lower === '!clima' || lower === '!c') {
     await humanDelay();
     try {
-      const { getWeather, formatWeatherMorning, formatWeatherMidday, formatWeatherEvening } = await import('./services/weather/forecast.js');
+      const { getWeather, formatWeatherFull } = await import('./services/weather/forecast.js');
       const w = await getWeather();
       if (!w) {
         await sendText(jid, '❌ No pude obtener el clima, mi amor. Intenta en un rato.');
         return;
       }
-      const msg = [
-        formatWeatherMorning(w),
-        '',
-        formatWeatherMidday(w),
-        '',
-        formatWeatherEvening(w),
-      ].join('\n');
-      await sendText(jid, msg);
+      await sendText(jid, formatWeatherFull(w));
     } catch (err) {
       console.error('Error clima:', err.message);
       await sendText(jid, '❌ Hubo un problema con el clima, corazón.');
@@ -499,7 +655,7 @@ async function handlePing(jid) {
 }
 
 /* ============================================================
- *  SERVIDOR HTTP (healthcheck para Render y UptimeRobot)
+ *  SERVIDOR HTTP
  * ============================================================ */
 const PORT = process.env.PORT || 3000;
 const server = createServer((req, res) => {
