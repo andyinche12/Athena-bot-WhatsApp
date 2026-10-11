@@ -52,9 +52,10 @@ const COMMANDS_HELP = `🤖 *Athena Bot* — Comandos disponibles:
 !help → Esta ayuda
 
 🎤 *Audio*
-Envía una nota de voz → la transcribo y respondo con voz
+Envía una nota de voz → la transcribo y respondo en texto
 !voz <texto> → Fuerza respuesta en audio
 !texto <texto> → Fuerza respuesta en texto
+💡 Para recibir respuesta en audio: di "respóndeme en audio" en tu mensaje
 
 🖼️ *Imágenes*
 Envía una foto (con o sin caption) → la analizo y respondo
@@ -63,13 +64,44 @@ Envía una foto (con o sin caption) → la analizo y respondo
 • Escribe "sí estudié" o "no estudié" para responder al recordatorio
 • Forzar proveedor: !groq, !gemini, !nvidia, !openrouter + pregunta`;
 
+// Palabras clave que activan respuesta en voz
+const VOICE_KEYWORDS = [
+  'en audio',
+  'en voz',
+  'por audio',
+  'por voz',
+  'respóndeme en audio',
+  'respondeme en audio',
+  'respóndeme en voz',
+  'respondeme en voz',
+  'dime en audio',
+  'dime en voz',
+  'contéstame en audio',
+  'contestame en audio',
+  'contéstame en voz',
+  'contestame en voz',
+  'mándame un audio',
+  'mandame un audio',
+  'mándame audio',
+  'mandame audio',
+  'envíame un audio',
+  'enviame un audio',
+  'con tu voz',
+  'en tu voz',
+  'háblame',
+  'hablame',
+];
+
 async function handleMessage(sock, msg) {
   const jid = msg.key.remoteJid;
   const pushName = msg.pushName || 'desconocido';
 
   const isAudio = !!msg.message?.audioMessage;
   const isImage = !!msg.message?.imageMessage;
-  const replyWithVoice = isAudio;
+
+  // Por defecto, responder SIEMPRE en texto
+  // Solo responder en voz si el usuario lo pide explícitamente
+  let replyWithVoice = false;
 
   let text =
     msg.message?.conversation ||
@@ -94,7 +126,7 @@ async function handleMessage(sock, msg) {
   console.log(`   ¿Es owner? ${ownerCheck ? '✅ SÍ' : '❌ NO'}`);
   if (!ownerCheck) return;
 
-  // TRANSCRIPCIÓN DE AUDIO
+  // ==================== TRANSCRIPCIÓN DE AUDIO ====================
   if (isAudio) {
     try {
       const transcription = await transcribeAudioMessage(msg, sock);
@@ -115,7 +147,7 @@ async function handleMessage(sock, msg) {
     }
   }
 
-  // ANÁLISIS DE IMAGEN
+  // ==================== ANÁLISIS DE IMAGEN ====================
   if (isImage) {
     try {
       const caption = msg.message.imageMessage?.caption || '';
@@ -131,10 +163,20 @@ async function handleMessage(sock, msg) {
     }
   }
 
+  // ==================== DETECCIÓN DE SOLICITUD DE VOZ ====================
+  // Buscar palabras clave en el texto (funciona tanto con texto como con audio transcrito)
+  const lowerForVoice = text.toLowerCase();
+  const userAskedForVoice = VOICE_KEYWORDS.some((kw) => lowerForVoice.includes(kw));
+
+  if (userAskedForVoice) {
+    replyWithVoice = true;
+    console.log('   🔊 Usuario pidió respuesta en audio');
+  }
+
   console.log(`   Texto: "${text.slice(0, 200)}${text.length > 200 ? '...' : ''}"`);
   const lower = text.trim().toLowerCase();
 
-  // CONFIRMACIONES DE ESTUDIO
+  // ==================== CONFIRMACIONES DE ESTUDIO ====================
   if (['sí estudié', 'si estudie', 'sí', 'si', 'estudié', 'estudie', '✅'].includes(lower)) {
     const pending = await getPendingStudyConfirmation(jid);
     if (pending) {
@@ -156,7 +198,7 @@ async function handleMessage(sock, msg) {
     }
   }
 
-  // COMANDOS DE VOZ
+  // ==================== COMANDO !voz ====================
   if (lower.startsWith('!voz ')) {
     const textToSay = text.slice(5).trim();
     if (!textToSay) {
@@ -175,13 +217,15 @@ async function handleMessage(sock, msg) {
     return;
   }
 
+  // ==================== COMANDO !texto ====================
   let forceTextReply = false;
   if (lower.startsWith('!texto ')) {
     text = text.slice(7).trim();
     forceTextReply = true;
+    replyWithVoice = false; // forzar texto
   }
 
-  // COMANDOS
+  // ==================== COMANDOS ====================
   if (lower === '!ping') { await handlePing(jid); return; }
 
   if (lower === '!help' || lower === '!ayuda' || lower === '!comandos') {
@@ -304,7 +348,7 @@ async function handleMessage(sock, msg) {
     return;
   }
 
-  // LLM NORMAL
+  // ==================== LLM NORMAL ====================
   let preferred;
   let userText = text;
   const m = text.match(/^!(groq|gemini|nvidia|openrouter)\s+(.*)$/is);
@@ -337,7 +381,7 @@ async function handleMessage(sock, msg) {
 
     if (shouldReplyWithVoice) {
       try {
-        console.log('   🔊 Generando respuesta en voz...');
+        console.log('   🔊 Generando respuesta en voz (solicitado por usuario)...');
         const audioBuffer = await textToSpeech(result.text);
         await sendAudio(jid, audioBuffer);
         console.log(`   ✅ Enviado (voz, ${(audioBuffer.length / 1024).toFixed(1)} KB)`);
