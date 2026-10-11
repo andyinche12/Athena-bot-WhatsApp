@@ -1,0 +1,150 @@
+{
+  "period": "2026-II",
+  "weeks": {
+    "1": "24/08 al 28/08",
+    "2": "31/08 al 04/09",
+    "3": "07/09 al 11/09",
+    "4": "14/09 al 18/09",
+    "5": "21/09 al 25/09",
+    "6": "28/09 al 02/10",
+    "7": "05/10 al 09/10",
+    "8": "12/10 al 16/10",
+    "9": "19/10 al 23/10",
+    "10": "26/10 al 30/10",
+    "11": "02/11 al 06/11",
+    "12": "09/11 al 13/11",
+    "13": "16/11 al 20/11",
+    "14": "23/11 al 27/11",
+    "15": "30/11 al 04/12",
+    "16": "07/12 al 11/12",
+    "17": "14/12 al 18/12"
+  },
+  "courses": {
+    "contabilidad-financieras": {
+      "name": "Contabilidad de Entidades Financieras",
+      "topics": {
+        "1": { "topic": "Sistema Financiero: definición, organización, estructura, evolución, importancia y fines" },
+        "2": { "topic": "Órganos de Regulación y control del sistema financiero nacional, base legal y funciones" },
+        "3": { "topic": "Ley N° 26702 - Ley General del Sistema Financiero Nacional, Sistema de Seguros y Sistema Privado de Pensiones" },
+        "4": { "topic": "Encaje bancario: concepto, importancia, características" },
+        "5": { "topic": "Plan contable financiero: estructura, identificación de cuentas, nomenclatura, codificación" },
+        "6": { "topic": "Clase 01 Activo: descripción, dinámica, débitos, créditos, préstamos, operaciones activas" },
+        "7": { "topic": "Clase 02 Pasivo: descripción, dinámica, depósitos, operaciones pasivas" },
+        "8": { "topic": "Clase 03 Patrimonio: descripción, dinámica, capital" },
+        "9": { "topic": "Clase 04 Gastos: descripción, dinámica, intereses cobrados y pagados" },
+        "10": { "topic": "Clase 05 Ingresos: descripción, dinámica, intereses cobrados y pagados" },
+        "11": { "topic": "Clase 06 Cuentas de Resultados: resultado del ejercicio" },
+        "12": { "topic": "Clase 07 Cuentas de Contingencias" },
+        "13": { "topic": "Clase 08 Cuentas de orden" },
+        "14": { "topic": "Libros contables: inventario y balances, asiento de apertura, mayorización" },
+        "15": { "topic": "Balance de comprobación: estructura, procedimientos, resultados" },
+        "16": { "topic": "Estados financieros: concepto, características, importancia y finalidad" }
+      }
+    },
+    "comprension-ingles": {
+      "name": "Comprensión y Redacción en Inglés",
+      "topics": {
+        "1": { "topic": "Simple past: was/were. Relatar en simple past extrayendo ideas principales" },
+        "2": { "topic": "Time expressions: yesterday, last, ago, past dates/years" },
+        "3": { "topic": "Passive Voice: is done, was done, be/have/do past tenses" },
+        "4": { "topic": "Reports passive: is being done, has been done" },
+        "5": { "topic": "Modal verbs: can, could, should, must, might, have to, would you like?, I'd rather, I'd like" },
+        "6": { "topic": "Imperatives: do this, don't do that, let's do this" },
+        "7": { "topic": "Existential and impersonal: there is / there are, it, auxiliary verbs" },
+        "8": { "topic": "Future: future perfect, regular and irregular verbs" },
+        "9": { "topic": "What are you doing tomorrow? I'm going to, I will" },
+        "10": { "topic": "Repaso y práctica de estructuras verbales" },
+        "11": { "topic": "Lectura comprensiva de textos técnicos contables" },
+        "12": { "topic": "Redacción de párrafos técnicos en inglés" },
+        "13": { "topic": "Conectores: first, then, next, finally" },
+        "14": { "topic": "Traducción de textos contables al inglés" },
+        "15": { "topic": "Redacción de documentos técnicos" },
+        "16": { "topic": "Evaluación final y presentaciones" }
+      }
+    },
+    "solucion-problemas": {
+      "name": "Solución de Problemas",
+      "topics": {
+        "1": { "topic": "Características del problema: definición y tipología de conflictos y problemas en la unidad contable" },
+        "2": { "topic": "Contexto del problema: problema vs. síntoma en la gestión contable. Los 5 elementos del problema" },
+        "3": { "topic": "Recolección de datos y evidencias: técnicas e instrumentos (auditoría documental, listas de cotejo, entrevistas)" },
+        "4": { "topic": "Causas que originan el problema: tipología de causas (estructurales, procedimentales, humanas, sistemas)" },
+        "5": { "topic": "Procesos de análisis del problema: etapas y delimitación del alcance operativo" },
+        "6": { "topic": "Ciclo PHVA aplicado a procesos contables. Identificación de cuellos de botella" },
+        "7": { "topic": "Mecanismos alternativos de resolución de conflictos: negociación, mediación y conciliación" },
+        "8": { "topic": "Marco normativo: Código Tributario, Ley del Impuesto a la Renta, D.S. 003-97-TR (LPCL), RIT" },
+        "9": { "topic": "Fases de la metodología: identificación, focalización, generación de alternativas, evaluación" },
+        "10": { "topic": "Lluvia de ideas estructurada, Diagrama de Ishikawa (Causa-Efecto), Diagrama de Pareto (80/20)" },
+        "11": { "topic": "Listas de chequeo (checklists) para cierre contable. Diagrama de Gantt" },
+        "12": { "topic": "Organización de la información: mapas conceptuales, cuadros de mando, Kanban" },
+        "13": { "topic": "Comunicación asertiva: comunicación interpersonal directiva, manejo de objeciones" },
+        "14": { "topic": "Diseño de estrategias: SCAMPER, Design Thinking aplicados a procesos contables" },
+        "15": { "topic": "Evaluación e interpretación de resultados: KPIs de gestión contable-financiera" },
+        "16": { "topic": "Implementación de mecanismos de mejora: Kaizen y Lean Office en contabilidad" }
+      }
+    },
+    "analisis-eeff": {
+      "name": "Análisis e Interpretación de EEFF",
+      "topics": {
+        "1": { "topic": "Base legal del análisis e interpretación de los estados financieros. Usuarios internos y externos" },
+        "2": { "topic": "Análisis Financiero: fuentes para el análisis financiero, métodos financieros" },
+        "3": { "topic": "Análisis Vertical: procedimiento de aplicación en Estado de Situación Financiera y Estado de Resultados" },
+        "4": { "topic": "Análisis Horizontal: variaciones absolutas y relativas" },
+        "5": { "topic": "Ratios de Liquidez: razón corriente, prueba ácida, capital de trabajo" },
+        "6": { "topic": "Ratios de Solvencia: nivel de endeudamiento, estructura de financiamiento" },
+        "7": { "topic": "Ratios de Rentabilidad: ROA, ROE, márgenes" },
+        "8": { "topic": "Ratios de Actividad: eficiencia operativa, rotación de inventarios y cuentas por cobrar" },
+        "9": { "topic": "Métodos de Análisis Financiero: series de tendencia e indicadores integrados" },
+        "10": { "topic": "Horizontal y Vertical del Estado de Situación Financiera: integración completa" },
+        "11": { "topic": "Horizontal y Vertical del Estado de Resultados: integración completa" },
+        "12": { "topic": "Explicación Económica y Financiera: interpretación de resultados, razones financieras" },
+        "13": { "topic": "Informe de la Evaluación Financiera: priorización de hallazgos relevantes" },
+        "14": { "topic": "Informe de la Evaluación Económica: integración de informe económico y financiero" },
+        "15": { "topic": "Elaboración del documento único final según modelo institucional" },
+        "16": { "topic": "Presentación y sustentación del informe final" }
+      }
+    },
+    "auditoria": {
+      "name": "Auditoría Financiera",
+      "topics": {
+        "1": { "topic": "Técnicas de Auditoría: concepto, finalidad, clasificación (ocular, verbal, escrita, documental, inspección física)" },
+        "2": { "topic": "Técnica de Investigación: técnicas de recopilación de información, indagación (NIA 500)" },
+        "3": { "topic": "Técnicas de obtención de evidencia física: definición, alcance, ventajas y desventajas" },
+        "4": { "topic": "Técnicas de obtención de evidencia documental: definición, alcance, ventajas y desventajas" },
+        "5": { "topic": "Técnicas de obtención de evidencia testimonial: definición, alcance, ventajas y desventajas" },
+        "6": { "topic": "Técnicas de obtención de evidencia analítica: definición, alcance, evaluación operativa" },
+        "7": { "topic": "Pruebas de cumplimiento: definición, propósito y ejemplos (NIA 330)" },
+        "8": { "topic": "Pruebas sustantivas y procedimientos analíticos (NIA 520)" },
+        "9": { "topic": "Procedimientos en la Fase Preliminar de la auditoría" },
+        "10": { "topic": "Procedimientos en la Fase de Planeamiento de la auditoría" },
+        "11": { "topic": "Procedimientos en la Fase de Ejecución de la auditoría" },
+        "12": { "topic": "Procedimientos en la Fase Final de la auditoría" },
+        "13": { "topic": "Papeles de trabajo: elaboración y archivo" },
+        "14": { "topic": "Informe de auditoría: estructura y tipos de opinión" },
+        "15": { "topic": "Casos prácticos integrales de auditoría" },
+        "16": { "topic": "Presentación y sustentación de informe final de auditoría" }
+      }
+    },
+    "finanzas-privadas": {
+      "name": "Finanzas Privadas",
+      "topics": {
+        "1": { "topic": "Fundamentos de las finanzas: objetivos, funciones financieras en la empresa, áreas de aplicación" },
+        "2": { "topic": "La empresa: actividades económicas, proceso de creación de valor, operaciones de inversión/financiamiento" },
+        "3": { "topic": "Planificación financiera: corto y largo plazo, proyección de ingresos y gastos, presupuestos" },
+        "4": { "topic": "Sistema financiero: intermediarios, productos y servicios financieros, mercado financiero" },
+        "5": { "topic": "Liquidez: disponibilidades de efectivo, capital de trabajo, razón corriente, prueba ácida" },
+        "6": { "topic": "Riesgos financieros: riesgo de crédito, riesgo de mercado, riesgo operativo" },
+        "7": { "topic": "Rentabilidad: económica, financiera, indicadores, factores que influyen" },
+        "8": { "topic": "Previsión de tesorería: flujo de ingresos y egresos, presupuesto de tesorería" },
+        "9": { "topic": "Tasas del mercado financiero: activas, pasivas, nominales, efectivas" },
+        "10": { "topic": "Anualidades: vencida, anticipada, diferida. Aplicación en operaciones financieras" },
+        "11": { "topic": "Renta periódica: elementos, relación entre tasa, plazo y renta" },
+        "12": { "topic": "Ciclo de conversión del efectivo: ciclo operativo, período promedio de inventarios, cobranza, pago" },
+        "13": { "topic": "Decisiones de financiamiento: fuentes internas y externas" },
+        "14": { "topic": "Apalancamiento: operativo, financiero, total" },
+        "15": { "topic": "Evaluación de proyectos de inversión" },
+        "16": { "topic": "Presentación de caso práctico final" }
+      }
+    }
+  }
+}

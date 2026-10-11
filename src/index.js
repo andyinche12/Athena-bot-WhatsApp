@@ -7,6 +7,9 @@ import {
   getRecentMessages,
   clearHistory,
   getStats,
+  getPendingStudyConfirmation,
+  answerStudyConfirmation,
+  getStudyStats,
 } from './memory/store.js';
 import {
   getToday,
@@ -14,6 +17,9 @@ import {
   getWeek,
   getNextClass,
 } from './syllabus/schedule.js';
+import { getCurrentWeek, getTopicForWeek } from './syllabus/topics.js';
+import { startCronJobs } from './cron/reminders.js';
+import { createServer } from 'http';
 
 console.log('🤖 Athena Bot — Asistente Académico');
 console.log('   Entorno:', config.nodeEnv);
@@ -52,12 +58,52 @@ async function handleMessage(sock, msg) {
 
   const ownerCheck = isOwner(jid);
   console.log(`   ¿Es owner? ${ownerCheck ? '✅ SÍ' : '❌ NO'}`);
-
   if (!ownerCheck) return;
 
-  // ---------- Comandos ----------
   const lower = text.trim().toLowerCase();
 
+  // ==================== RESPUESTAS A CONFIRMACIONES ====================
+  if (
+    lower === 'sí estudié' ||
+    lower === 'si estudie' ||
+    lower === 'sí' ||
+    lower === 'si' ||
+    lower === 'estudié' ||
+    lower === 'estudie' ||
+    lower === '✅'
+  ) {
+    const pending = getPendingStudyConfirmation(jid);
+    if (pending) {
+      answerStudyConfirmation(pending.id, true);
+      const stats = getStudyStats(jid, 30);
+      await humanDelay();
+      await sendText(
+        jid,
+        `💪 ¡Excelente! Anotado. Llevas *${stats.studied}/${stats.total}* días de estudio en los últimos 30 días.`
+      );
+      return;
+    }
+  }
+
+  if (
+    lower === 'no estudié' ||
+    lower === 'no estudie' ||
+    lower === 'no' ||
+    lower === '❌'
+  ) {
+    const pending = getPendingStudyConfirmation(jid);
+    if (pending) {
+      answerStudyConfirmation(pending.id, false);
+      await humanDelay();
+      await sendText(
+        jid,
+        `😅 Bueno, aún tienes tiempo. Mañana te recuerdo de nuevo.`
+      );
+      return;
+    }
+  }
+
+  // ==================== COMANDOS ====================
   if (lower === '!ping') {
     await handlePing(jid);
     return;
@@ -74,12 +120,18 @@ async function handleMessage(sock, msg) {
 !mañana → Clases de mañana
 !semana → Semana completa
 !próxima → Siguiente clase
+!tema → Tema de la semana actual por curso
 
 📊 *Sistema*
 !ping → Estado de los 4 LLMs
-!stats → Estadísticas de memoria
+!stats → Estadísticas
 !reset → Borra historial
-!help → Esta ayuda`
+!help → Esta ayuda
+
+🧪 *Debug*
+!test-reminder → Simula recordatorio de mañana
+!test-today → Simula recordatorio de hoy
+!test-week → Simula vista previa semanal`
     );
     return;
   }
@@ -87,13 +139,15 @@ async function handleMessage(sock, msg) {
   if (lower === '!stats') {
     await humanDelay();
     const s = getStats(jid);
+    const study = getStudyStats(jid, 30);
     await sendText(
       jid,
       `📊 *Estadísticas*
 
 💬 Mensajes: ${s.messages}
-🧠 Hechos guardados: ${s.facts}
-📝 Tareas pendientes: ${s.pendingTasks}`
+🧠 Hechos: ${s.facts}
+📝 Tareas pendientes: ${s.pendingTasks}
+📚 Estudio (30d): ${study.studied}/${study.total}`
     );
     return;
   }
@@ -105,16 +159,43 @@ async function handleMessage(sock, msg) {
     return;
   }
 
-  // ---------- Comandos académicos ----------
+  if (lower === '!tema') {
+    await humanDelay();
+    const week = getCurrentWeek();
+    const courses = [
+      'contabilidad-financieras',
+      'comprension-ingles',
+      'solucion-problemas',
+      'analisis-eeff',
+      'auditoria',
+      'finanzas-privadas',
+    ];
+    const lines = [`📚 *Temas de la semana ${week}*\n`];
+    for (const key of courses) {
+      const t = getTopicForWeek(key, week);
+      if (t) {
+        lines.push(`*${t.courseName}*`);
+        lines.push(`📖 ${t.topic}\n`);
+      }
+    }
+    await sendText(jid, lines.join('\n'));
+    return;
+  }
+
+  // ==================== COMANDOS ACADÉMICOS ====================
   if (lower === '!hoy') {
     await humanDelay();
     const classes = getToday();
     if (classes.length === 0) {
       await sendText(jid, '🎉 Hoy no tienes clases. ¡Descansa!');
     } else {
-      const lines = classes.map(
-        (c) => `⏰ *${c.start} - ${c.end}*\n📚 ${c.course.name}\n👨‍🏫 ${c.course.teacher}`
-      );
+      const week = getCurrentWeek();
+      const lines = classes.map((c) => {
+        const topic = getTopicForWeek(c.courseKey, week);
+        let block = `⏰ *${c.start} - ${c.end}*\n📚 ${c.course.name}\n👨‍🏫 ${c.course.teacher}`;
+        if (topic) block += `\n📖 ${topic.topic}`;
+        return block;
+      });
       await sendText(jid, `📅 *Clases de hoy*\n\n${lines.join('\n\n')}`);
     }
     return;
@@ -126,9 +207,13 @@ async function handleMessage(sock, msg) {
     if (classes.length === 0) {
       await sendText(jid, '🎉 Mañana no tienes clases.');
     } else {
-      const lines = classes.map(
-        (c) => `⏰ *${c.start} - ${c.end}*\n📚 ${c.course.name}\n👨‍🏫 ${c.course.teacher}`
-      );
+      const week = getCurrentWeek() + 1;
+      const lines = classes.map((c) => {
+        const topic = getTopicForWeek(c.courseKey, week);
+        let block = `⏰ *${c.start} - ${c.end}*\n📚 ${c.course.name}\n👨‍🏫 ${c.course.teacher}`;
+        if (topic) block += `\n📖 SEM-${week}: ${topic.topic}`;
+        return block;
+      });
       await sendText(jid, `📅 *Clases de mañana*\n\n${lines.join('\n\n')}`);
     }
     return;
@@ -164,7 +249,32 @@ async function handleMessage(sock, msg) {
     return;
   }
 
-  // ---------- LLM normal ----------
+  // ==================== COMANDOS DE PRUEBA ====================
+  if (lower === '!test-reminder') {
+    await humanDelay();
+    await sendText(jid, '⏳ Simulando recordatorio de mañana...');
+    const { reminderTomorrow } = await import('./cron/reminders.js');
+    await reminderTomorrow();
+    return;
+  }
+
+  if (lower === '!test-today') {
+    await humanDelay();
+    await sendText(jid, '⏳ Simulando recordatorio de hoy...');
+    const { reminderToday } = await import('./cron/reminders.js');
+    await reminderToday();
+    return;
+  }
+
+  if (lower === '!test-week') {
+    await humanDelay();
+    await sendText(jid, '⏳ Simulando vista previa semanal...');
+    const { reminderWeeklyPreview } = await import('./cron/reminders.js');
+    await reminderWeeklyPreview();
+    return;
+  }
+
+  // ==================== LLM NORMAL ====================
   let preferred;
   let userText = text;
   const m = text.match(/^!(groq|gemini|nvidia|openrouter)\s+(.*)$/i);
@@ -186,7 +296,6 @@ async function handleMessage(sock, msg) {
     ];
 
     console.log(`   🧠 Contexto: ${contextMessages.length} mensajes previos`);
-
     console.log(`   🤖 Enviando a LLM${preferred ? ` (preferido: ${preferred})` : ''}...`);
     const result = await askLLM(messages, { preferred });
 
@@ -225,11 +334,35 @@ async function handlePing(jid) {
   await sendText(jid, lines.join('\n'));
 }
 
+// --- Servidor HTTP para healthcheck ---
+const PORT = process.env.PORT || 3000;
+const server = createServer((req, res) => {
+  if (req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(
+      JSON.stringify({
+        status: 'ok',
+        service: 'athena-bot-whatsapp',
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString(),
+      })
+    );
+  } else {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Athena Bot WhatsApp — en línea');
+  }
+});
+
+server.listen(PORT, () => {
+  console.log(`🌐 Healthcheck HTTP escuchando en puerto ${PORT}`);
+});
+
 // --- Arranque ---
 (async () => {
   try {
     console.log('\n🚀 Iniciando Athena Bot...\n');
     await startWhatsApp(handleMessage);
+    startCronJobs();
   } catch (err) {
     console.error('❌ Error fatal al arrancar:', err);
     process.exit(1);
@@ -239,27 +372,4 @@ async function handlePing(jid) {
 process.on('SIGINT', () => {
   console.log('\n👋 Cerrando Athena Bot...');
   process.exit(0);
-});
-
-// --- Servidor HTTP mínimo para healthcheck (Render + UptimeRobot) ---
-import { createServer } from 'http';
-
-const PORT = process.env.PORT || 3000;
-const server = createServer((req, res) => {
-  if (req.url === '/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      status: 'ok',
-      service: 'athena-bot-whatsapp',
-      uptime: process.uptime(),
-      timestamp: new Date().toISOString(),
-    }));
-  } else {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Athena Bot WhatsApp — en línea');
-  }
-});
-
-server.listen(PORT, () => {
-  console.log(`🌐 Healthcheck HTTP escuchando en puerto ${PORT}`);
 });

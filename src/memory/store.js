@@ -137,3 +137,47 @@ export function getStats(chatId) {
     pendingTasks: db.prepare(`SELECT COUNT(*) as n FROM tasks WHERE chat_id = ? AND status = 'pending'`).get(chatId).n,
   };
 }
+
+// ---------- CONFIRMACIONES DE ESTUDIO ----------
+
+export function createStudyConfirmation(chatId, courseKey, studyDate) {
+  const stmt = db.prepare(`
+    INSERT INTO study_confirmations (chat_id, course_key, study_date, asked_at)
+    VALUES (?, ?, ?, ?)
+  `);
+  return stmt.run(chatId, courseKey, studyDate, Date.now()).lastInsertRowid;
+}
+
+export function getPendingStudyConfirmation(chatId) {
+  const stmt = db.prepare(`
+    SELECT id, course_key, study_date
+    FROM study_confirmations
+    WHERE chat_id = ? AND responded_at IS NULL
+    ORDER BY asked_at DESC
+    LIMIT 1
+  `);
+  return stmt.get(chatId);
+}
+
+export function answerStudyConfirmation(id, studied) {
+  const stmt = db.prepare(`
+    UPDATE study_confirmations
+    SET responded_at = ?, studied = ?
+    WHERE id = ?
+  `);
+  return stmt.run(Date.now(), studied ? 1 : 0, id).changes;
+}
+
+export function getStudyStats(chatId, days = 30) {
+  const stmt = db.prepare(`
+    SELECT
+      COUNT(*) as total,
+      SUM(CASE WHEN studied = 1 THEN 1 ELSE 0 END) as studied
+    FROM study_confirmations
+    WHERE chat_id = ?
+      AND responded_at IS NOT NULL
+      AND asked_at >= ?
+  `);
+  const since = Date.now() - days * 24 * 60 * 60 * 1000;
+  return stmt.get(chatId, since) || { total: 0, studied: 0 };
+}

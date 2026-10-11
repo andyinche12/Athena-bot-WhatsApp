@@ -64,6 +64,19 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_reminders_pending
     ON reminders (sent, remind_at);
+  
+    CREATE TABLE IF NOT EXISTS study_confirmations (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id      TEXT NOT NULL,
+    course_key   TEXT NOT NULL,
+    study_date   TEXT NOT NULL,
+    asked_at     INTEGER NOT NULL,
+    responded_at INTEGER,
+    studied      INTEGER
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_study_chat_date
+    ON study_confirmations (chat_id, study_date);  
 `);
 
 console.log('🗄️  SQLite listo:', config.memoryDbPath);
