@@ -1,82 +1,35 @@
-import Database from 'better-sqlite3';
-import { mkdirSync } from 'fs';
-import { dirname } from 'path';
+import { createClient } from '@supabase/supabase-js';
 import { config } from '../config/env.js';
 
-// Asegurar que existe ./data/
-mkdirSync(dirname(config.memoryDbPath), { recursive: true });
+// ============================================================
+//  Cliente Supabase compartido para toda la memoria
+//  (Reemplaza a SQLite para persistir entre deploys de Render)
+// ============================================================
 
-export const db = new Database(config.memoryDbPath);
+export const supabase = createClient(
+  config.supabaseUrl,
+  config.supabaseAnonKey,
+  {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  }
+);
 
-// Optimizaciones para SQLite local
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+// Verificar conexión al arrancar
+(async () => {
+  try {
+    const { error } = await supabase
+      .from('athena_messages')
+      .select('id', { count: 'exact', head: true });
 
-// ---------- Esquema ----------
-db.exec(`
-  CREATE TABLE IF NOT EXISTS messages (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id     TEXT NOT NULL,
-    role        TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
-    content     TEXT NOT NULL,
-    provider    TEXT,
-    model       TEXT,
-    timestamp   INTEGER NOT NULL
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_messages_chat_time
-    ON messages (chat_id, timestamp DESC);
-
-  CREATE TABLE IF NOT EXISTS facts (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id     TEXT NOT NULL,
-    fact        TEXT NOT NULL,
-    category    TEXT DEFAULT 'general',
-    created_at  INTEGER NOT NULL
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_facts_chat
-    ON facts (chat_id);
-
-  CREATE TABLE IF NOT EXISTS tasks (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id     TEXT NOT NULL,
-    title       TEXT NOT NULL,
-    description TEXT,
-    course      TEXT,
-    due_date    TEXT,
-    status      TEXT NOT NULL DEFAULT 'pending',
-    created_at  INTEGER NOT NULL,
-    completed_at INTEGER
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_tasks_chat_status
-    ON tasks (chat_id, status);
-
-  CREATE TABLE IF NOT EXISTS reminders (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id     TEXT NOT NULL,
-    text        TEXT NOT NULL,
-    remind_at   TEXT NOT NULL,
-    sent        INTEGER NOT NULL DEFAULT 0,
-    created_at  INTEGER NOT NULL
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_reminders_pending
-    ON reminders (sent, remind_at);
-  
-    CREATE TABLE IF NOT EXISTS study_confirmations (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id      TEXT NOT NULL,
-    course_key   TEXT NOT NULL,
-    study_date   TEXT NOT NULL,
-    asked_at     INTEGER NOT NULL,
-    responded_at INTEGER,
-    studied      INTEGER
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_study_chat_date
-    ON study_confirmations (chat_id, study_date);  
-`);
-
-console.log('🗄️  SQLite listo:', config.memoryDbPath);
+    if (error) {
+      console.error('❌ Error conectando a Supabase:', error.message);
+    } else {
+      console.log('🗄️  Memoria: Supabase PostgreSQL conectado ✅');
+    }
+  } catch (err) {
+    console.error('❌ Error inicializando memoria:', err.message);
+  }
+})();

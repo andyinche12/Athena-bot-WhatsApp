@@ -36,7 +36,6 @@ if (config.owners.length === 0 && config.ownerLids.length === 0) {
   console.warn('⚠️  OWNER_NUMBER / OWNER_LID no configurados.');
 }
 
-// --- Lista de comandos (para !help) ---
 const COMMANDS_HELP = `🤖 *Athena Bot* — Comandos disponibles:
 
 📅 *Académico*
@@ -59,30 +58,17 @@ Envía una nota de voz → la transcribo y respondo con voz
 
 🖼️ *Imágenes*
 Envía una foto (con o sin caption) → la analizo y respondo
-Ejemplos de captions:
-  • "resuélvelo"
-  • "pásalo a texto"
-  • "explícame esto"
-
-🧪 *Debug*
-!test-reminder → Simula recordatorio 19:00
-!test-today → Simula recordatorio 07:00
-!test-week → Simula vista previa dominical
 
 💡 También funciona:
 • Escribe "sí estudié" o "no estudié" para responder al recordatorio
 • Forzar proveedor: !groq, !gemini, !nvidia, !openrouter + pregunta`;
 
-// --- Handler de mensajes ---
 async function handleMessage(sock, msg) {
   const jid = msg.key.remoteJid;
   const pushName = msg.pushName || 'desconocido';
 
-  // Detectar tipo de mensaje multimedia
   const isAudio = !!msg.message?.audioMessage;
   const isImage = !!msg.message?.imageMessage;
-
-  // Recordar si el mensaje entrante fue audio → responder con audio
   const replyWithVoice = isAudio;
 
   let text =
@@ -108,7 +94,7 @@ async function handleMessage(sock, msg) {
   console.log(`   ¿Es owner? ${ownerCheck ? '✅ SÍ' : '❌ NO'}`);
   if (!ownerCheck) return;
 
-  // ==================== TRANSCRIPCIÓN DE AUDIO (con contexto) ====================
+  // TRANSCRIPCIÓN DE AUDIO
   if (isAudio) {
     try {
       const transcription = await transcribeAudioMessage(msg, sock);
@@ -116,24 +102,20 @@ async function handleMessage(sock, msg) {
 
       if (cleanText.length < 3) {
         console.log('   ⚠️  Transcripción vacía o muy corta');
-        await sendText(
-          jid,
-          '🤔 No pude entender bien tu nota de voz. ¿Puedes repetirla más despacio o escribirme el mensaje? 🙏'
-        );
+        await sendText(jid, '🤔 Mi amor, no entendí bien tu audio. ¿Me lo repites? 🙏');
         return;
       }
 
-      // Envolver con contexto para que el LLM entienda que es una transcripción
       text = `[El usuario envió una nota de voz que fue transcrita automáticamente. Contenido: "${cleanText}"]\n\nResponde directamente al contenido, NO comentes sobre la transcripción ni sobre tu capacidad de procesar audio.`;
-      console.log(`   ✅ Texto envuelto para LLM: "${text.slice(0, 150)}..."`);
+      console.log(`   ✅ Texto envuelto para LLM`);
     } catch (err) {
       console.error('Error transcribiendo:', err.message);
-      await sendText(jid, '❌ No pude transcribir el audio. Intenta de nuevo.');
+      await sendText(jid, '❌ No pude escuchar tu audio, mi amor. Intenta de nuevo.');
       return;
     }
   }
 
-  // ==================== ANÁLISIS DE IMAGEN ====================
+  // ANÁLISIS DE IMAGEN
   if (isImage) {
     try {
       const caption = msg.message.imageMessage?.caption || '';
@@ -144,7 +126,7 @@ async function handleMessage(sock, msg) {
         : `[Contenido de la imagen]:\n${analysis}`;
     } catch (err) {
       console.error('Error analizando imagen:', err.message);
-      await sendText(jid, '❌ No pude analizar la imagen. Intenta de nuevo.');
+      await sendText(jid, '❌ No pude ver la imagen, corazón. Intenta de nuevo.');
       return;
     }
   }
@@ -152,31 +134,29 @@ async function handleMessage(sock, msg) {
   console.log(`   Texto: "${text.slice(0, 200)}${text.length > 200 ? '...' : ''}"`);
   const lower = text.trim().toLowerCase();
 
-  // ==================== CONFIRMACIONES DE ESTUDIO ====================
+  // CONFIRMACIONES DE ESTUDIO
   if (['sí estudié', 'si estudie', 'sí', 'si', 'estudié', 'estudie', '✅'].includes(lower)) {
-    const pending = getPendingStudyConfirmation(jid);
+    const pending = await getPendingStudyConfirmation(jid);
     if (pending) {
-      answerStudyConfirmation(pending.id, true);
-      const stats = getStudyStats(jid, 30);
+      await answerStudyConfirmation(pending.id, true);
+      const stats = await getStudyStats(jid, 30);
       await humanDelay();
-      await sendText(jid, `💪 ¡Excelente! Anotado. Llevas *${stats.studied}/${stats.total}* días de estudio en los últimos 30 días.`);
+      await sendText(jid, `💪 ¡Ese es mi Werner! Anotado. Llevas *${stats.studied}/${stats.total}* días estudiando en los últimos 30. ¡Sigue así, mi amor! 💙`);
       return;
     }
   }
 
   if (['no estudié', 'no estudie', 'no', '❌'].includes(lower)) {
-    const pending = getPendingStudyConfirmation(jid);
+    const pending = await getPendingStudyConfirmation(jid);
     if (pending) {
-      answerStudyConfirmation(pending.id, false);
+      await answerStudyConfirmation(pending.id, false);
       await humanDelay();
-      await sendText(jid, `😅 Bueno, aún tienes tiempo. Mañana te recuerdo de nuevo.`);
+      await sendText(jid, `😅 Bueno, mi amor, aún tienes tiempo. Mañana te recuerdo otra vez. No te agobies 💙`);
       return;
     }
   }
 
-  // ==================== COMANDOS DE VOZ ====================
-
-  // !voz <texto> → forzar respuesta en audio
+  // COMANDOS DE VOZ
   if (lower.startsWith('!voz ')) {
     const textToSay = text.slice(5).trim();
     if (!textToSay) {
@@ -195,16 +175,13 @@ async function handleMessage(sock, msg) {
     return;
   }
 
-  // !texto <texto> → forzar respuesta en texto
-  // (reemplaza el texto actual y continúa el flujo normal sin replyWithVoice)
   let forceTextReply = false;
   if (lower.startsWith('!texto ')) {
     text = text.slice(7).trim();
     forceTextReply = true;
-    console.log(`   📝 Modo texto forzado: "${text.slice(0, 80)}..."`);
   }
 
-  // ==================== COMANDOS ====================
+  // COMANDOS
   if (lower === '!ping') { await handlePing(jid); return; }
 
   if (lower === '!help' || lower === '!ayuda' || lower === '!comandos') {
@@ -215,8 +192,8 @@ async function handleMessage(sock, msg) {
 
   if (lower === '!stats') {
     await humanDelay();
-    const s = getStats(jid);
-    const study = getStudyStats(jid, 30);
+    const s = await getStats(jid);
+    const study = await getStudyStats(jid, 30);
     await sendText(jid, `📊 *Estadísticas*
 
 💬 Mensajes: ${s.messages}
@@ -228,8 +205,8 @@ async function handleMessage(sock, msg) {
 
   if (lower === '!reset') {
     await humanDelay();
-    const n = clearHistory(jid);
-    await sendText(jid, `🧹 Borrados ${n} mensajes del historial.`);
+    await clearHistory(jid);
+    await sendText(jid, `🧹 Historial borrado, mi amor.`);
     return;
   }
 
@@ -249,7 +226,7 @@ async function handleMessage(sock, msg) {
   if (lower === '!hoy') {
     await humanDelay();
     const classes = getToday();
-    if (classes.length === 0) { await sendText(jid, '🎉 Hoy no tienes clases. ¡Descansa!'); }
+    if (classes.length === 0) { await sendText(jid, '🎉 Hoy no tienes clases, corazón. ¡Descansa!'); }
     else {
       const week = getCurrentWeek();
       const lines = classes.map((c) => {
@@ -266,7 +243,7 @@ async function handleMessage(sock, msg) {
   if (lower === '!mañana' || lower === '!manana') {
     await humanDelay();
     const classes = getTomorrow();
-    if (classes.length === 0) { await sendText(jid, '🎉 Mañana no tienes clases.'); }
+    if (classes.length === 0) { await sendText(jid, '🎉 Mañana no tienes clases, mi amor.'); }
     else {
       const week = getCurrentWeek() + 1;
       const lines = classes.map((c) => {
@@ -295,7 +272,7 @@ async function handleMessage(sock, msg) {
   if (lower === '!proxima' || lower === '!próxima') {
     await humanDelay();
     const next = getNextClass();
-    if (!next) { await sendText(jid, 'No hay clases próximas.'); }
+    if (!next) { await sendText(jid, 'No hay clases próximas, mi amor.'); }
     else {
       const when = next.when === 'hoy' ? 'Hoy' : next.when === 'mañana' ? 'Mañana' : next.when;
       await sendText(jid, `📌 *Próxima clase*\n\n${when}\n⏰ ${next.start} - ${next.end}\n📚 ${next.course.name}\n👨‍🏫 ${next.course.teacher}`);
@@ -305,7 +282,7 @@ async function handleMessage(sock, msg) {
 
   if (lower === '!test-reminder') {
     await humanDelay();
-    await sendText(jid, '⏳ Simulando recordatorio de mañana...');
+    await sendText(jid, '⏳ Simulando recordatorio...');
     const { reminderTomorrow } = await import('./cron/reminders.js');
     await reminderTomorrow();
     return;
@@ -327,15 +304,15 @@ async function handleMessage(sock, msg) {
     return;
   }
 
-  // ==================== LLM NORMAL ====================
+  // LLM NORMAL
   let preferred;
   let userText = text;
   const m = text.match(/^!(groq|gemini|nvidia|openrouter)\s+(.*)$/is);
   if (m) { preferred = m[1].toLowerCase(); userText = m[2]; }
 
   try {
-    saveMessage(jid, 'user', userText);
-    const history = getRecentMessages(jid, config.memoryMaxShortTerm);
+    await saveMessage(jid, 'user', userText);
+    const history = await getRecentMessages(jid, config.memoryMaxShortTerm);
     const contextMessages = history.slice(0, -1);
     const messages = [
       { role: 'system', content: SYSTEM_PROMPT },
@@ -344,47 +321,43 @@ async function handleMessage(sock, msg) {
     ];
 
     console.log(`   🧠 Contexto: ${contextMessages.length} mensajes previos`);
-    console.log(`   🤖 Enviando a LLM${preferred ? ` (preferido: ${preferred})` : ''}...`);
+    console.log(`   🤖 Enviando a LLM...`);
     const result = await askLLM(messages, { preferred });
 
     console.log(`   📝 Respuesta de ${result.provider} (${result.model})`);
-    saveMessage(jid, 'assistant', result.text, { provider: result.provider, model: result.model });
+    await saveMessage(jid, 'assistant', result.text, { provider: result.provider, model: result.model });
 
     await humanDelay();
 
-    // Decidir si responder con voz o texto
-    // Voz si: el usuario envió audio, no forzó texto, y la respuesta no es muy larga
     const shouldReplyWithVoice =
       replyWithVoice &&
       !forceTextReply &&
       result.text.length <= 500 &&
-      !result.text.includes('```'); // evitar audios con bloques de código
+      !result.text.includes('```');
 
     if (shouldReplyWithVoice) {
       try {
         console.log('   🔊 Generando respuesta en voz...');
         const audioBuffer = await textToSpeech(result.text);
         await sendAudio(jid, audioBuffer);
-        console.log(`   ✅ Enviado a WhatsApp (voz, ${(audioBuffer.length / 1024).toFixed(1)} KB)`);
+        console.log(`   ✅ Enviado (voz, ${(audioBuffer.length / 1024).toFixed(1)} KB)`);
       } catch (err) {
-        console.error('❌ Falló TTS, enviando como texto:', err.message);
+        console.error('❌ Falló TTS, enviando texto:', err.message);
         await sendText(jid, result.text);
-        console.log(`   ✅ Enviado a WhatsApp (texto fallback)`);
       }
     } else {
       await sendText(jid, result.text);
-      console.log(`   ✅ Enviado a WhatsApp (texto)`);
+      console.log(`   ✅ Enviado (texto)`);
     }
   } catch (err) {
     console.error('❌ Error LLM:', err.message);
     await humanDelay();
-    await sendText(jid, '⚠️ Todos los proveedores LLM fallaron.');
+    await sendText(jid, '⚠️ Algo falló, mi amor. Intenta de nuevo.');
   }
 }
 
-// --- !ping ---
 async function handlePing(jid) {
-  await sendText(jid, '🏓 Probando proveedores LLM...');
+  await sendText(jid, '🏓 Probando proveedores...');
   const lines = [];
   for (const name of PROVIDERS_AVAILABLE) {
     try {
@@ -397,7 +370,6 @@ async function handlePing(jid) {
   await sendText(jid, lines.join('\n'));
 }
 
-// --- Servidor HTTP ---
 const PORT = process.env.PORT || 3000;
 const server = createServer((req, res) => {
   if (req.url === '/health') {
@@ -417,14 +389,13 @@ server.listen(PORT, () => {
   console.log(`🌐 Healthcheck HTTP escuchando en puerto ${PORT}`);
 });
 
-// --- Arranque ---
 (async () => {
   try {
     console.log('\n🚀 Iniciando Athena Bot...\n');
     await startWhatsApp(handleMessage);
     startCronJobs();
   } catch (err) {
-    console.error('❌ Error fatal al arrancar:', err);
+    console.error('❌ Error fatal:', err);
     process.exit(1);
   }
 })();

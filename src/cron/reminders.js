@@ -15,6 +15,9 @@ import { createStudyConfirmation } from '../memory/store.js';
 
 const DAYS_ES = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 
+/**
+ * Envía un mensaje a todos los owners.
+ */
 async function broadcast(text) {
   for (const owner of config.owners) {
     try {
@@ -50,7 +53,7 @@ async function reminderTomorrow() {
 
   if (classes.length === 0) {
     await broadcast(
-      `🌙 Buenas noches, Werner.\n\nMañana ${dayName} no tienes clases. Descansa 😴`
+      `🌙 Buenas noches, mi amor.\n\nMañana ${dayName} no tienes clases. Descansa mucho 😴💙`
     );
     return;
   }
@@ -72,15 +75,15 @@ async function reminderTomorrow() {
     lines.push('');
   }
 
-  lines.push('¿Ya repasaste algo para mañana? Responde:');
+  lines.push('¿Ya repasaste algo para mañana, mi amor? 💙');
   lines.push('✅ *sí estudié*');
   lines.push('❌ *no estudié*');
 
-  // Registrar la pregunta para cada curso
+  // Registrar la pregunta para cada curso (AHORA con await)
   for (const owner of config.owners) {
     for (const tc of toConfirm) {
       try {
-        createStudyConfirmation(owner, tc.courseKey, tomorrowISO());
+        await createStudyConfirmation(owner, tc.courseKey, tomorrowISO());
       } catch (err) {
         console.error('Error guardando confirmación:', err.message);
       }
@@ -101,13 +104,17 @@ async function reminderToday() {
   const classes = getToday();
 
   if (classes.length === 0) {
-    if (today.getDay() === 0 || today.getDay() === 6) return;
-    await broadcast(`☀️ Buenos días, Werner.\n\nHoy ${dayName} no tienes clases. ¡Buen día! 😊`);
+    // No enviar si es fin de semana (para no spamear)
+    if (today.getDay() === 0 || today.getDay() === 6) {
+      console.log('   Es fin de semana, saltando recordatorio matutino');
+      return;
+    }
+    await broadcast(`☀️ Buenos días, mi amor.\n\nHoy ${dayName} no tienes clases. ¡Disfruta el día! 😊💙`);
     return;
   }
 
   const week = getCurrentWeek();
-  const lines = [`☀️ *Buenos días, Werner*\n`, `Hoy es ${dayName} y tienes:\n`];
+  const lines = [`☀️ *Buenos días, mi amor*\n`, `Hoy es ${dayName} y tienes:\n`];
 
   for (const c of classes) {
     lines.push(`⏰ ${c.start} - ${c.end}`);
@@ -118,10 +125,12 @@ async function reminderToday() {
     if (topic) {
       lines.push(`📖 SEM-${String(week).padStart(2, '0')}: ${topic.topic}`);
     }
+
     lines.push('');
   }
 
-  lines.push('¡Mucho éxito! 💪');
+  lines.push('¡Mucho éxito hoy, corazón! 💪💙');
+
   await broadcast(lines.join('\n'));
 }
 
@@ -132,14 +141,19 @@ async function reminderWeeklyPreview() {
   console.log('\n📅 [CRON] Vista previa semanal (domingo 19:00)');
 
   const { week, range, courses } = getNextWeekTopics();
-  const lines = [`📅 *Semana ${week} empieza mañana*`, `_${range}_\n`];
+
+  const lines = [
+    `📅 *Semana ${week} empieza mañana*`,
+    `_${range}_\n`,
+  ];
 
   for (const c of courses) {
     lines.push(`📚 *${c.courseName}*`);
     lines.push(`📖 ${c.topic}\n`);
   }
 
-  lines.push('💡 Buen momento para adelantar estudio este domingo.');
+  lines.push('💡 Buen momento para adelantar estudio este domingo, mi amor. ¡Vamos con todo! 💙');
+
   await broadcast(lines.join('\n'));
 }
 
@@ -164,9 +178,20 @@ function startSelfPing() {
 }
 
 export function startCronJobs() {
-  cron.schedule('0 19 * * *', reminderTomorrow, { timezone: 'America/Lima' });
-  cron.schedule('0 7 * * *', reminderToday, { timezone: 'America/Lima' });
-  cron.schedule('0 19 * * 0', reminderWeeklyPreview, { timezone: 'America/Lima' });
+  // Todos los días a las 19:00 hora Perú
+  cron.schedule('0 19 * * *', reminderTomorrow, {
+    timezone: 'America/Lima',
+  });
+
+  // Todos los días a las 07:00 hora Perú
+  cron.schedule('0 7 * * *', reminderToday, {
+    timezone: 'America/Lima',
+  });
+
+  // Domingos a las 19:00 — resumen semanal
+  cron.schedule('0 19 * * 0', reminderWeeklyPreview, {
+    timezone: 'America/Lima',
+  });
 
   console.log('⏰ Cron jobs activos:');
   console.log('   • 19:00 diario → recordatorio de mañana + pregunta');
@@ -176,4 +201,5 @@ export function startCronJobs() {
   startSelfPing();
 }
 
+// Exportar para testing manual
 export { reminderTomorrow, reminderToday, reminderWeeklyPreview };

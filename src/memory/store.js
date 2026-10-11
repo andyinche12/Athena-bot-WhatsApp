@@ -1,183 +1,265 @@
-import { db } from './db.js';
+import { supabase } from './db.js';
 import { config } from '../config/env.js';
 
-// ---------- MENSAJES ----------
+// ============================================================
+//  MENSAJES
+// ============================================================
 
-/**
- * Guarda un mensaje en el historial.
- */
-export function saveMessage(chatId, role, content, meta = {}) {
-  const stmt = db.prepare(`
-    INSERT INTO messages (chat_id, role, content, provider, model, timestamp)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `);
-  return stmt.run(
-    chatId,
+export async function saveMessage(chatId, role, content, meta = {}) {
+  const { error } = await supabase.from('athena_messages').insert({
+    chat_id: chatId,
     role,
     content,
-    meta.provider || null,
-    meta.model || null,
-    Date.now()
-  );
+    provider: meta.provider || null,
+    model: meta.model || null,
+    timestamp: Date.now(),
+  });
+  if (error) console.error('saveMessage error:', error.message);
 }
 
-/**
- * Devuelve los últimos N mensajes de un chat (en orden cronológico).
- * Ideal para pasarlos al LLM como contexto.
- */
-export function getRecentMessages(chatId, limit = config.memoryMaxShortTerm) {
-  const stmt = db.prepare(`
-    SELECT role, content FROM messages
-    WHERE chat_id = ?
-    ORDER BY timestamp DESC
-    LIMIT ?
-  `);
-  const rows = stmt.all(chatId, limit);
-  return rows.reverse(); // orden cronológico ascendente
+export async function getRecentMessages(chatId, limit = config.memoryMaxShortTerm) {
+  const { data, error } = await supabase
+    .from('athena_messages')
+    .select('role, content, timestamp')
+    .eq('chat_id', chatId)
+    .order('timestamp', { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error('getRecentMessages error:', error.message);
+    return [];
+  }
+
+  return (data || []).reverse().map(({ role, content }) => ({ role, content }));
 }
 
-/**
- * Cuántos mensajes tiene un chat.
- */
-export function countMessages(chatId) {
-  const stmt = db.prepare(`SELECT COUNT(*) as n FROM messages WHERE chat_id = ?`);
-  return stmt.get(chatId).n;
+export async function countMessages(chatId) {
+  const { count, error } = await supabase
+    .from('athena_messages')
+    .select('*', { count: 'exact', head: true })
+    .eq('chat_id', chatId);
+
+  if (error) return 0;
+  return count || 0;
 }
 
-/**
- * Borra el historial de un chat (útil para !reset).
- */
-export function clearHistory(chatId) {
-  const stmt = db.prepare(`DELETE FROM messages WHERE chat_id = ?`);
-  return stmt.run(chatId).changes;
+export async function clearHistory(chatId) {
+  const { error } = await supabase
+    .from('athena_messages')
+    .delete()
+    .eq('chat_id', chatId);
+
+  if (error) return 0;
+  return 1; // no podemos saber cuántas se borraron exactamente sin un select previo
 }
 
-// ---------- HECHOS ----------
+// ============================================================
+//  HECHOS
+// ============================================================
 
-export function saveFact(chatId, fact, category = 'general') {
-  const stmt = db.prepare(`
-    INSERT INTO facts (chat_id, fact, category, created_at)
-    VALUES (?, ?, ?, ?)
-  `);
-  return stmt.run(chatId, fact, category, Date.now());
+export async function saveFact(chatId, fact, category = 'general') {
+  const { error } = await supabase.from('athena_facts').insert({
+    chat_id: chatId,
+    fact,
+    category,
+    created_at: Date.now(),
+  });
+  if (error) console.error('saveFact error:', error.message);
 }
 
-export function getFacts(chatId) {
-  const stmt = db.prepare(`
-    SELECT fact, category FROM facts
-    WHERE chat_id = ?
-    ORDER BY created_at DESC
-  `);
-  return stmt.all(chatId);
+export async function getFacts(chatId) {
+  const { data, error } = await supabase
+    .from('athena_facts')
+    .select('fact, category')
+    .eq('chat_id', chatId)
+    .order('created_at', { ascending: false });
+
+  if (error) return [];
+  return data || [];
 }
 
-// ---------- TAREAS ----------
+// ============================================================
+//  TAREAS
+// ============================================================
 
-export function createTask(chatId, { title, description = null, course = null, dueDate = null }) {
-  const stmt = db.prepare(`
-    INSERT INTO tasks (chat_id, title, description, course, due_date, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `);
-  const result = stmt.run(chatId, title, description, course, dueDate, Date.now());
-  return result.lastInsertRowid;
+export async function createTask(chatId, { title, description = null, course = null, dueDate = null }) {
+  const { data, error } = await supabase
+    .from('athena_tasks')
+    .insert({
+      chat_id: chatId,
+      title,
+      description,
+      course,
+      due_date: dueDate,
+      created_at: Date.now(),
+    })
+    .select('id')
+    .single();
+
+  if (error) {
+    console.error('createTask error:', error.message);
+    return null;
+  }
+  return data?.id;
 }
 
-export function getPendingTasks(chatId) {
-  const stmt = db.prepare(`
-    SELECT id, title, description, course, due_date, created_at
-    FROM tasks
-    WHERE chat_id = ? AND status = 'pending'
-    ORDER BY
-      CASE WHEN due_date IS NULL THEN 1 ELSE 0 END,
-      due_date ASC,
-      created_at DESC
-  `);
-  return stmt.all(chatId);
+export async function getPendingTasks(chatId) {
+  const { data, error } = await supabase
+    .from('athena_tasks')
+    .select('id, title, description, course, due_date, created_at')
+    .eq('chat_id', chatId)
+    .eq('status', 'pending')
+    .order('created_at', { ascending: false });
+
+  if (error) return [];
+  return data || [];
 }
 
-export function completeTask(taskId) {
-  const stmt = db.prepare(`
-    UPDATE tasks SET status = 'done', completed_at = ?
-    WHERE id = ?
-  `);
-  return stmt.run(Date.now(), taskId).changes;
+export async function completeTask(taskId) {
+  const { error } = await supabase
+    .from('athena_tasks')
+    .update({ status: 'done', completed_at: Date.now() })
+    .eq('id', taskId);
+
+  if (error) return 0;
+  return 1;
 }
 
-// ---------- RECORDATORIOS ----------
+// ============================================================
+//  RECORDATORIOS
+// ============================================================
 
-export function createReminder(chatId, text, remindAt) {
-  const stmt = db.prepare(`
-    INSERT INTO reminders (chat_id, text, remind_at, created_at)
-    VALUES (?, ?, ?, ?)
-  `);
-  return stmt.run(chatId, text, remindAt, Date.now()).lastInsertRowid;
+export async function createReminder(chatId, text, remindAt) {
+  const { data, error } = await supabase
+    .from('athena_reminders')
+    .insert({
+      chat_id: chatId,
+      text,
+      remind_at: remindAt,
+      created_at: Date.now(),
+    })
+    .select('id')
+    .single();
+
+  if (error) {
+    console.error('createReminder error:', error.message);
+    return null;
+  }
+  return data?.id;
 }
 
-export function getPendingReminders() {
-  const stmt = db.prepare(`
-    SELECT id, chat_id, text, remind_at
-    FROM reminders
-    WHERE sent = 0 AND remind_at <= ?
-    ORDER BY remind_at ASC
-  `);
-  return stmt.all(new Date().toISOString());
+export async function getPendingReminders() {
+  const nowISO = new Date().toISOString();
+  const { data, error } = await supabase
+    .from('athena_reminders')
+    .select('id, chat_id, text, remind_at')
+    .eq('sent', 0)
+    .lte('remind_at', nowISO)
+    .order('remind_at', { ascending: true });
+
+  if (error) return [];
+  return data || [];
 }
 
-export function markReminderSent(id) {
-  const stmt = db.prepare(`UPDATE reminders SET sent = 1 WHERE id = ?`);
-  return stmt.run(id).changes;
+export async function markReminderSent(id) {
+  const { error } = await supabase
+    .from('athena_reminders')
+    .update({ sent: 1 })
+    .eq('id', id);
+
+  if (error) return 0;
+  return 1;
 }
 
-// ---------- ESTADÍSTICAS ----------
+// ============================================================
+//  CONFIRMACIONES DE ESTUDIO
+// ============================================================
 
-export function getStats(chatId) {
-  return {
-    messages: countMessages(chatId),
-    facts: db.prepare(`SELECT COUNT(*) as n FROM facts WHERE chat_id = ?`).get(chatId).n,
-    pendingTasks: db.prepare(`SELECT COUNT(*) as n FROM tasks WHERE chat_id = ? AND status = 'pending'`).get(chatId).n,
-  };
+export async function createStudyConfirmation(chatId, courseKey, studyDate) {
+  const { data, error } = await supabase
+    .from('athena_study_confirmations')
+    .insert({
+      chat_id: chatId,
+      course_key: courseKey,
+      study_date: studyDate,
+      asked_at: Date.now(),
+    })
+    .select('id')
+    .single();
+
+  if (error) {
+    console.error('createStudyConfirmation error:', error.message);
+    return null;
+  }
+  return data?.id;
 }
 
-// ---------- CONFIRMACIONES DE ESTUDIO ----------
+export async function getPendingStudyConfirmation(chatId) {
+  const { data, error } = await supabase
+    .from('athena_study_confirmations')
+    .select('id, course_key, study_date')
+    .eq('chat_id', chatId)
+    .is('responded_at', null)
+    .order('asked_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
-export function createStudyConfirmation(chatId, courseKey, studyDate) {
-  const stmt = db.prepare(`
-    INSERT INTO study_confirmations (chat_id, course_key, study_date, asked_at)
-    VALUES (?, ?, ?, ?)
-  `);
-  return stmt.run(chatId, courseKey, studyDate, Date.now()).lastInsertRowid;
+  if (error) return null;
+  return data;
 }
 
-export function getPendingStudyConfirmation(chatId) {
-  const stmt = db.prepare(`
-    SELECT id, course_key, study_date
-    FROM study_confirmations
-    WHERE chat_id = ? AND responded_at IS NULL
-    ORDER BY asked_at DESC
-    LIMIT 1
-  `);
-  return stmt.get(chatId);
+export async function answerStudyConfirmation(id, studied) {
+  const { error } = await supabase
+    .from('athena_study_confirmations')
+    .update({
+      responded_at: Date.now(),
+      studied: studied ? 1 : 0,
+    })
+    .eq('id', id);
+
+  if (error) return 0;
+  return 1;
 }
 
-export function answerStudyConfirmation(id, studied) {
-  const stmt = db.prepare(`
-    UPDATE study_confirmations
-    SET responded_at = ?, studied = ?
-    WHERE id = ?
-  `);
-  return stmt.run(Date.now(), studied ? 1 : 0, id).changes;
-}
-
-export function getStudyStats(chatId, days = 30) {
-  const stmt = db.prepare(`
-    SELECT
-      COUNT(*) as total,
-      SUM(CASE WHEN studied = 1 THEN 1 ELSE 0 END) as studied
-    FROM study_confirmations
-    WHERE chat_id = ?
-      AND responded_at IS NOT NULL
-      AND asked_at >= ?
-  `);
+export async function getStudyStats(chatId, days = 30) {
   const since = Date.now() - days * 24 * 60 * 60 * 1000;
-  return stmt.get(chatId, since) || { total: 0, studied: 0 };
+
+  const { data, error } = await supabase
+    .from('athena_study_confirmations')
+    .select('studied')
+    .eq('chat_id', chatId)
+    .not('responded_at', 'is', null)
+    .gte('asked_at', since);
+
+  if (error) return { total: 0, studied: 0 };
+
+  const total = data?.length || 0;
+  const studied = (data || []).filter((r) => r.studied === 1).length;
+
+  return { total, studied };
+}
+
+// ============================================================
+//  ESTADÍSTICAS
+// ============================================================
+
+export async function getStats(chatId) {
+  const [messages, factsRes, tasksRes] = await Promise.all([
+    countMessages(chatId),
+    supabase
+      .from('athena_facts')
+      .select('*', { count: 'exact', head: true })
+      .eq('chat_id', chatId),
+    supabase
+      .from('athena_tasks')
+      .select('*', { count: 'exact', head: true })
+      .eq('chat_id', chatId)
+      .eq('status', 'pending'),
+  ]);
+
+  return {
+    messages,
+    facts: factsRes.count || 0,
+    pendingTasks: tasksRes.count || 0,
+  };
 }
