@@ -3,7 +3,16 @@
  * API gratuita, sin key, sin límites prácticos.
  * Docs: https://open-meteo.com/en/docs
  *
- * v2: añadido timeout, retry, y logs detallados de errores.
+ * v4 — Mejoras:
+ *   • Caché de 10 min (evita llamar a la API en cada comando)
+ *   • Sensación térmica (aparent_temperature)
+ *   • Viento con dirección (velocidad + rumbo)
+ *   • Humedad relativa
+ *   • Índice UV (con alertas si es muy alto)
+ *   • Amanecer y atardecer
+ *   • Emoji contextual por franja horaria
+ *   • Formato compacto y útil por franja
+ *   • Alertas inteligentes (lluvia fuerte, viento, UV, etc.)
  */
 
 const LAT = -11.15;
@@ -14,8 +23,22 @@ const TZ = 'America/Lima';
 const FETCH_TIMEOUT_MS = 8000;
 // Reintentos máximos
 const MAX_RETRIES = 2;
+// Caché: tiempo de vida en ms (10 minutos)
+const CACHE_TTL_MS = 10 * 60 * 1000;
 
-// Códigos WMO → descripción + emoji
+/* ============================================================
+ *  Caché en memoria
+ * ============================================================ */
+let _cache = null;
+let _cacheTime = 0;
+
+function isCacheValid() {
+  return _cache && Date.now() - _cacheTime < CACHE_TTL_MS;
+}
+
+/* ============================================================
+ *  Códigos WMO → descripción + emoji base
+ * ============================================================ */
 const WEATHER_CODES = {
   0:  { desc: 'Despejado',            emoji: '☀️' },
   1:  { desc: 'Mayormente despejado', emoji: '🌤️' },
@@ -45,12 +68,62 @@ function codeInfo(code) {
 }
 
 /**
- * Fetch con timeout usando AbortController.
+ * Devuelve el emoji apropiado según el código WMO y la hora del día.
+ * Ajusta solo los códigos "despejados" para reflejar día vs noche.
  */
+function emojiForHour(code, hour) {
+  const base = codeInfo(code).emoji;
+
+  if (code === 0 || code === 1) {
+    // Noche: 19:00 a 05:59
+    if (hour >= 19 || hour < 6) {
+      return code === 0 ? '🌙' : '☁️';
+    }
+    // Mediodía / tarde: 12:00 a 17:59
+    if (hour >= 12 && hour < 18) {
+      return code === 0 ? '☀️' : '🌤️';
+    }
+    // Mañana temprano / atardecer
+    return code === 0 ? '☀️' : '🌤️';
+  }
+
+  return base;
+}
+
+/**
+ * Convierte grados a punto cardinal (N, NE, E, etc.)
+ */
+function windDirection(degrees) {
+  const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'];
+  return dirs[Math.round(degrees / 45) % 8];
+}
+
+/**
+ * Nivel de UV según el índice.
+ */
+function uvLevel(uv) {
+  if (uv <= 2) return { level: 'bajo', emoji: '🟢' };
+  if (uv <= 5) return { level: 'moderado', emoji: '🟡' };
+  if (uv <= 7) return { level: 'alto', emoji: '🟠' };
+  if (uv <= 10) return { level: 'muy alto', emoji: '🔴' };
+  return { level: 'extremo', emoji: '🟣' };
+}
+
+/**
+ * Formatea una hora ISO (2026-10-11T06:12) → "06:12"
+ */
+function formatHour(isoStr) {
+  if (!isoStr) return '';
+  const t = isoStr.split('T')[1];
+  return t ? t.slice(0, 5) : '';
+}
+
+/* ============================================================
+ *  Fetch con timeout
+ * ============================================================ */
 async function fetchWithTimeout(url, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-
   try {
     const res = await fetch(url, { signal: controller.signal });
     return res;
@@ -59,17 +132,22 @@ async function fetchWithTimeout(url, timeoutMs) {
   }
 }
 
-/**
- * Obtiene el clima de hoy y mañana para Junín, con granularidad por franja.
- * Reintenta hasta MAX_RETRIES veces si falla.
- * @returns {Promise<{hoy: object, manana: object} | null>}
- */
+/* ============================================================
+ *  getWeather() — con caché, retry y parámetros ampliados
+ * ============================================================ */
 export async function getWeather() {
+  // Caché válida → devolver sin llamar a la API
+  if (isCacheValid()) {
+    const ageMin = Math.round((Date.now() - _cacheTime) / 60000);
+    console.log(`🌤️ [Weather] Usando caché (${ageMin} min)`);
+    return _cache;
+  }
+
   const url =
     `https://api.open-meteo.com/v1/forecast?` +
     `latitude=${LAT}&longitude=${LON}` +
-    `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max` +
-    `&hourly=weather_code,temperature_2m,precipitation_probability` +
+    `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,uv_index_max,wind_speed_10m_max` +
+    `&hourly=weather_code,temperature_2m,apparent_temperature,precipitation_probability,relative_humidity_2m,wind_speed_10m,wind_direction_10m` +
     `&timezone=${encodeURIComponent(TZ)}` +
     `&forecast_days=3`;
 
@@ -77,18 +155,14 @@ export async function getWeather() {
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     const t0 = Date.now();
-
     try {
       const res = await fetchWithTimeout(url, FETCH_TIMEOUT_MS);
       const elapsed = Date.now() - t0;
 
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status} ${res.statusText}`);
-      }
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
 
       const data = await res.json();
 
-      // Validar estructura mínima
       if (!data.daily || !data.hourly || !data.daily.weather_code) {
         throw new Error('Respuesta inválida de Open-Meteo (faltan campos)');
       }
@@ -96,35 +170,31 @@ export async function getWeather() {
       const hoy = buildDayInfo(data, 0);
       const manana = buildDayInfo(data, 1);
 
+      // Guardar en caché
+      _cache = { hoy, manana };
+      _cacheTime = Date.now();
+
       console.log(`   ✅ Open-Meteo OK (${elapsed}ms, intento ${attempt})`);
-      return { hoy, manana };
+      return _cache;
     } catch (err) {
       const elapsed = Date.now() - t0;
-      const isAbort = err.name === 'AbortError';
-      const reason = isAbort ? 'TIMEOUT' : err.message;
-
+      const reason = err.name === 'AbortError' ? 'TIMEOUT' : err.message;
       console.error(
         `   ⚠️  Intento ${attempt}/${MAX_RETRIES} falló (${elapsed}ms): ${reason}`
       );
-
-      // Si es el último intento, dar up
       if (attempt === MAX_RETRIES) {
         console.error('   ❌ Open-Meteo falló todos los intentos');
         return null;
       }
-
-      // Esperar antes de reintentar (backoff: 500ms, 1000ms)
       await new Promise((r) => setTimeout(r, attempt * 500));
     }
   }
-
   return null;
 }
 
-/**
- * Construye la info de un día específico (offset 0 = hoy, 1 = mañana).
- * Incluye franjas horarias: mañana, mediodía, tarde, noche.
- */
+/* ============================================================
+ *  Construcción de un día (con todos los datos nuevos)
+ * ============================================================ */
 function buildDayInfo(data, dayOffset) {
   const { daily, hourly } = data;
 
@@ -133,14 +203,34 @@ function buildDayInfo(data, dayOffset) {
   const tMin = Math.round(daily.temperature_2m_min[dayOffset]);
   const rainProb = daily.precipitation_probability_max[dayOffset];
   const info = codeInfo(code);
+  const sunrise = formatHour(daily.sunrise?.[dayOffset]);
+  const sunset = formatHour(daily.sunset?.[dayOffset]);
+  const uvMax = daily.uv_index_max?.[dayOffset] ?? null;
+  const windMax = daily.wind_speed_10m_max?.[dayOffset] ?? null;
 
   const getSlot = (hour) => {
     const idx = dayOffset * 24 + hour;
     const c = hourly.weather_code[idx];
     const t = Math.round(hourly.temperature_2m[idx]);
+    const feels = Math.round(hourly.apparent_temperature?.[idx] ?? t);
     const r = hourly.precipitation_probability[idx];
+    const humidity = hourly.relative_humidity_2m?.[idx] ?? null;
+    const windSpd = Math.round(hourly.wind_speed_10m?.[idx] ?? 0);
+    const windDir = hourly.wind_direction_10m?.[idx] ?? 0;
     const ci = codeInfo(c);
-    return { code: c, desc: ci.desc, emoji: ci.emoji, temp: t, rainProb: r };
+    const emoji = emojiForHour(c, hour);
+
+    return {
+      code: c,
+      desc: ci.desc,
+      emoji,
+      temp: t,
+      feels,
+      rainProb: r,
+      humidity,
+      windSpd,
+      windDir: windDirection(windDir),
+    };
   };
 
   return {
@@ -150,6 +240,10 @@ function buildDayInfo(data, dayOffset) {
     tempMin: tMin,
     tempMax: tMax,
     rainProb,
+    sunrise,
+    sunset,
+    uvMax,
+    windMax,
     morning: getSlot(7),
     noon: getSlot(12),
     afternoon: getSlot(15),
@@ -159,7 +253,37 @@ function buildDayInfo(data, dayOffset) {
 }
 
 /* ============================================================
- *  Formateadores
+ *  Helpers para generar la línea de cada franja
+ * ============================================================ */
+function slotLine(label, slot) {
+  const temp = `${slot.emoji} ${slot.desc}, ${slot.temp}°C`;
+  const feels = slot.feels !== slot.temp ? `(ST ${slot.feels}°C)` : '';
+  return `${label}: ${temp} ${feels}`.trim();
+}
+
+function rainAlert(prob) {
+  if (prob >= 70) return `☔ Lluvia muy probable (${prob}%) — paraguas obligatorio`;
+  if (prob >= 50) return `🌧️ Lluvia probable (${prob}%) — lleva paraguas`;
+  if (prob >= 20) return `🌦️ Posible lluvia (${prob}%)`;
+  return null;
+}
+
+function uvAlert(uv) {
+  if (uv === null || uv === undefined) return null;
+  const { level, emoji } = uvLevel(uv);
+  if (uv >= 6) return `${emoji} UV ${level} (${uv.toFixed(1)}) — usa protector solar`;
+  return null;
+}
+
+function windAlert(wind) {
+  if (wind === null || wind === undefined) return null;
+  if (wind >= 40) return `💨 Viento fuerte (${Math.round(wind)} km/h)`;
+  if (wind >= 25) return `💨 Viento moderado (${Math.round(wind)} km/h)`;
+  return null;
+}
+
+/* ============================================================
+ *  Formateadores públicos
  * ============================================================ */
 
 export function formatWeatherMorning(weather) {
@@ -168,15 +292,13 @@ export function formatWeatherMorning(weather) {
   const { hoy } = weather;
   const lines = [
     `${hoy.emoji} *Clima en Junín (hoy)*`,
-    `Mañana: ${hoy.morning.emoji} ${hoy.morning.desc}, ${hoy.morning.temp}°C`,
+    slotLine('Mañana', hoy.morning),
     `Día: ${hoy.tempMin}° - ${hoy.tempMax}°C`,
+    `🌅 ${hoy.sunrise} · 🌇 ${hoy.sunset}`,
   ];
 
-  if (hoy.rainProb >= 50) {
-    lines.push(`☔ Lluvia probable (${hoy.rainProb}%) — lleva paraguas`);
-  } else if (hoy.rainProb >= 20) {
-    lines.push(`🌦️ Posible lluvia (${hoy.rainProb}%)`);
-  }
+  const r = rainAlert(hoy.rainProb);
+  if (r) lines.push(r);
 
   return lines.join('\n');
 }
@@ -187,16 +309,17 @@ export function formatWeatherMidday(weather) {
   const { hoy } = weather;
   const lines = [
     `🌤️ *Clima ahora y en la tarde*`,
-    `Mediodía: ${hoy.noon.emoji} ${hoy.noon.desc}, ${hoy.noon.temp}°C`,
-    `Tarde (3 pm): ${hoy.afternoon.emoji} ${hoy.afternoon.desc}, ${hoy.afternoon.temp}°C`,
+    slotLine('Mediodía', hoy.noon),
+    slotLine('Tarde (3 pm)', hoy.afternoon),
+    `💧 Humedad: ${hoy.noon.humidity}% · 💨 Viento: ${hoy.noon.windSpd} km/h ${hoy.noon.windDir}`,
   ];
 
   const maxRain = Math.max(hoy.noon.rainProb, hoy.afternoon.rainProb);
-  if (maxRain >= 50) {
-    lines.push(`☔ Lluvia probable (${maxRain}%) — lleva paraguas`);
-  } else if (maxRain >= 20) {
-    lines.push(`🌦️ Posible lluvia (${maxRain}%)`);
-  }
+  const r = rainAlert(maxRain);
+  if (r) lines.push(r);
+
+  const u = uvAlert(hoy.uvMax);
+  if (u) lines.push(u);
 
   return lines.join('\n');
 }
@@ -207,16 +330,13 @@ export function formatWeatherEvening(weather) {
   const { hoy, manana } = weather;
   const lines = [
     `🌙 *Clima de esta noche y mañana*`,
-    `Hoy noche: ${hoy.night.emoji} ${hoy.night.desc}, ${hoy.night.temp}°C`,
-    `Mañana: ${manana.emoji} ${manana.desc}, ${manana.tempMin}° - ${manana.tempMax}°C`,
-    `Mañana temprano: ${manana.morning.emoji} ${manana.morning.desc}, ${manana.morning.temp}°C`,
+    slotLine('Hoy noche', hoy.night),
+    slotLine('Mañana temprano', manana.morning),
+    `Mañana: ${manana.tempMin}° - ${manana.tempMax}°C`,
   ];
 
-  if (manana.rainProb >= 50) {
-    lines.push(`☔ Lluvia probable mañana (${manana.rainProb}%) — lleva paraguas`);
-  } else if (manana.rainProb >= 20) {
-    lines.push(`🌦️ Posible lluvia mañana (${manana.rainProb}%)`);
-  }
+  const r = rainAlert(manana.rainProb);
+  if (r) lines.push(`☔ Mañana: ${r.replace(/^[^\w]*\s*/, '')}`);
 
   return lines.join('\n');
 }
@@ -227,14 +347,45 @@ export function formatWeatherTomorrow(weather) {
   const { manana } = weather;
   const lines = [
     `${manana.emoji} *Clima mañana en Junín*`,
-    `Mañana: ${manana.morning.emoji} ${manana.morning.desc}, ${manana.morning.temp}°C`,
-    `Tarde: ${manana.afternoon.emoji} ${manana.afternoon.desc}, ${manana.afternoon.temp}°C`,
+    slotLine('Mañana', manana.morning),
+    slotLine('Tarde', manana.afternoon),
     `Rango: ${manana.tempMin}° - ${manana.tempMax}°C`,
+    `🌅 ${manana.sunrise} · 🌇 ${manana.sunset}`,
   ];
 
-  if (manana.rainProb >= 50) {
-    lines.push(`☔ Lluvia probable (${manana.rainProb}%) — lleva paraguas`);
-  }
+  const r = rainAlert(manana.rainProb);
+  if (r) lines.push(r);
+
+  const u = uvAlert(manana.uvMax);
+  if (u) lines.push(u);
+
+  const w = windAlert(manana.windMax);
+  if (w) lines.push(w);
 
   return lines.join('\n');
+}
+
+/**
+ * Formato completo (usado por !clima).
+ * Combina morning + midday + evening en un solo mensaje limpio.
+ */
+export function formatWeatherFull(weather) {
+  if (!weather) return null;
+
+  return [
+    formatWeatherMorning(weather),
+    '',
+    formatWeatherMidday(weather),
+    '',
+    formatWeatherEvening(weather),
+  ].join('\n');
+}
+
+/**
+ * Invalida la caché manualmente (útil para tests o forzar refresh).
+ */
+export function clearWeatherCache() {
+  _cache = null;
+  _cacheTime = 0;
+  console.log('🌤️ [Weather] Caché invalidada');
 }
