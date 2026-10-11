@@ -1,0 +1,71 @@
+{
+  "period": "2026-II",
+  "institution": "IESTP San Ignacio de Loyola - Junín",
+  "program": "Contabilidad - VI Semestre",
+  "start_date": "2026-08-24",
+  "end_date": "2026-12-18",
+  "timezone": "America/Lima",
+  "break": { "start": "11:00", "end": "11:20", "label": "Refrigerio" },
+  "courses": {
+    "contabilidad-financieras": {
+      "name": "Contabilidad de Entidades Financieras",
+      "short": "Contabilidad Financieras",
+      "teacher": "CPC. Javier Cordova Chavez",
+      "color": "green"
+    },
+    "comprension-ingles": {
+      "name": "Comprensión y Redacción en Inglés",
+      "short": "Comprensión Inglés",
+      "teacher": "Bach. Deysi Tinoco Condor",
+      "color": "purple"
+    },
+    "solucion-problemas": {
+      "name": "Solución de Problemas",
+      "short": "Solución Problemas",
+      "teacher": "Tec. José Luis Hinostroza Puente",
+      "color": "green"
+    },
+    "analisis-eeff": {
+      "name": "Análisis e Interpretación de EEFF",
+      "short": "Análisis EEFF",
+      "teacher": "CPC. Eder José Mateo Ponce",
+      "color": "orange"
+    },
+    "auditoria": {
+      "name": "Auditoría Financiera",
+      "short": "Auditoría",
+      "teacher": "CPC. Fredy Maximiliano Valerio",
+      "color": "lightblue"
+    },
+    "finanzas-privadas": {
+      "name": "Finanzas Privadas",
+      "short": "Finanzas Privadas",
+      "teacher": "CPC. Jorge Luis Manyari Astuhuaman",
+      "color": "yellow"
+    }
+  },
+  "week": {
+    "lunes": [
+      { "start": "08:00", "end": "10:15", "courseKey": "contabilidad-financieras", "blocks": 3 },
+      { "start": "10:15", "end": "11:00", "courseKey": "comprension-ingles", "blocks": 1 },
+      { "start": "11:20", "end": "12:50", "courseKey": "comprension-ingles", "blocks": 2 }
+    ],
+    "martes": [
+      { "start": "08:00", "end": "10:15", "courseKey": "solucion-problemas", "blocks": 3 },
+      { "start": "10:15", "end": "12:50", "courseKey": "analisis-eeff", "blocks": 3 }
+    ],
+    "miercoles": [
+      { "start": "08:00", "end": "10:15", "courseKey": "auditoria", "blocks": 3 },
+      { "start": "10:15", "end": "12:50", "courseKey": "finanzas-privadas", "blocks": 3 }
+    ],
+    "jueves": [
+      { "start": "08:00", "end": "10:15", "courseKey": "analisis-eeff", "blocks": 3 },
+      { "start": "10:15", "end": "11:00", "courseKey": "analisis-eeff", "blocks": 1 },
+      { "start": "11:20", "end": "12:50", "courseKey": "contabilidad-financieras", "blocks": 2 }
+    ],
+    "viernes": [
+      { "start": "08:00", "end": "10:15", "courseKey": "finanzas-privadas", "blocks": 3 },
+      { "start": "10:15", "end": "12:50", "courseKey": "auditoria", "blocks": 3 }
+    ]
+  }
+}

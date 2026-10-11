@@ -1,0 +1,28 @@
+# Dependencias
+node_modules/
+package-lock.json
+
+# Sesión de WhatsApp (¡CRÍTICO! Nunca subir esto)
+data/session/
+data/*.db
+data/*.db-journal
+
+# Variables de entorno
+.env
+.env.local
+
+# Logs
+logs/*.log
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Temporales
+dist/
+build/
+*.tmp

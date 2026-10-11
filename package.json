@@ -1,0 +1,27 @@
+{
+  "name": "athena-bot-whatsapp",
+  "version": "0.1.0",
+  "description": "Asistente académico personal por WhatsApp",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon --ignore data/ --ignore logs/ --ignore public/ src/index.js",
+    "parse-syllabus": "node scripts/parse-syllabus.js"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "keywords": [
+    "whatsapp",
+    "bot",
+    "baileys",
+    "asistente",
+    "academico"
+  ],
+  "author": "Werner",
+  "license": "MIT",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.117.3"
+  }
+}
