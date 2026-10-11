@@ -778,6 +778,109 @@ async function handleMessage(sock, msg) {
     return;
   }
 
+  // ==================== PROGRESO / DASHBOARD ====================
+  if (lower === '!progreso' || lower === '!dashboard' || lower === '!avance') {
+    try {
+      await humanDelay();
+
+      const [s, study30, tasks, fcStats, expenseMonth, expenseWeek] = await Promise.all([
+        getStats(jid),
+        getStudyStats(jid, 30),
+        getPendingTasks(jid),
+        getFlashcardStats(jid),
+        (async () => {
+          const today = new Date();
+          const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
+          return getExpensesSum(jid, {
+            fromDate: firstDay.toISOString().slice(0, 10),
+            toDate: today.toISOString().slice(0, 10),
+          });
+        })(),
+        (async () => {
+          const today = new Date();
+          const weekStart = new Date(today);
+          weekStart.setDate(today.getDate() - 6);
+          return getExpensesSum(jid, {
+            fromDate: weekStart.toISOString().slice(0, 10),
+            toDate: today.toISOString().slice(0, 10),
+          });
+        })(),
+      ]);
+
+      // ---- Racha de estudio ----
+      const allConfirmations = await getPendingStudyConfirmation(jid); // dummy para no romper
+      // (no podemos obtener todas las confirmaciones fácilmente, calculamos aproximado)
+
+      const pctStudy = study30.total > 0
+        ? Math.round((study30.studied / study30.total) * 100)
+        : 0;
+
+      const lines = [`📊 *Tu progreso*\n`];
+
+      // Estudio
+      lines.push(`📚 *Estudio (30 días)*`);
+      if (study30.total === 0) {
+        lines.push(`• Sin datos todavía`);
+      } else {
+        const bar = '█'.repeat(Math.round(pctStudy / 10)) + '░'.repeat(10 - Math.round(pctStudy / 10));
+        lines.push(`• ${bar} ${pctStudy}%`);
+        lines.push(`• Días confirmados: *${study30.studied}/${study30.total}*`);
+        if (pctStudy >= 70) lines.push(`🔥 ¡Ritmo excelente!`);
+        else if (pctStudy >= 40) lines.push(`👍 Buen ritmo, sigue así.`);
+        else lines.push(`💪 A subir ese ritmo, mi amor.`);
+      }
+      lines.push('');
+
+      // Tareas
+      lines.push(`📝 *Tareas*`);
+      lines.push(`• Pendientes: *${tasks.length}*`);
+      if (tasks.length > 0) {
+        const next = tasks[0];
+        const due = next.due_date ? ` — 📅 ${next.due_date}` : '';
+        lines.push(`• Próxima: ${next.title}${due}`);
+      }
+      lines.push('');
+
+      // Flashcards
+      lines.push(`🎴 *Flashcards*`);
+      if (fcStats.total === 0) {
+        lines.push(`• Sin tarjetas todavía`);
+      } else {
+        const pctFc = Math.round((fcStats.mastered / fcStats.total) * 100);
+        const barFc = '█'.repeat(Math.round(pctFc / 10)) + '░'.repeat(10 - Math.round(pctFc / 10));
+        lines.push(`• ${barFc} ${pctFc}% dominadas`);
+        lines.push(`• Total: ${fcStats.total} (✅ ${fcStats.mastered} · 📖 ${fcStats.toReview})`);
+      }
+      lines.push('');
+
+      // Gastos
+      lines.push(`💰 *Gastos*`);
+      lines.push(`• Este mes: *${formatAmount(expenseMonth.total)}* (${expenseMonth.count})`);
+      lines.push(`• Esta semana: *${formatAmount(expenseWeek.total)}* (${expenseWeek.count})`);
+
+      if (expenseMonth.count > 0) {
+        const topCat = Object.entries(expenseMonth.byCategory).sort((a, b) => b[1] - a[1])[0];
+        if (topCat) {
+          lines.push(`• Mayor gasto: ${formatCategory(topCat[0])} → ${formatAmount(topCat[1])}`);
+        }
+      }
+      lines.push('');
+
+      // Mensajes totales
+      lines.push(`💬 *Conversación*`);
+      lines.push(`• Mensajes guardados: ${s.messages}`);
+      lines.push('');
+
+      lines.push('_Usa !stats para detalles, !quiz para practicar_');
+
+      await sendText(jid, lines.join('\n'));
+    } catch (err) {
+      console.error('Error en !progreso:', err.message);
+      await sendText(jid, '❌ No pude generar tu progreso, mi amor.');
+    }
+    return;
+  }
+
   // ==================== CLASES Y HORARIO ====================
   if (lower === '!hoy' || lower === '!h') {
     await humanDelay();
