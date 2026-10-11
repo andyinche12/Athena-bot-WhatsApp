@@ -76,7 +76,6 @@ async function handleMessage(sock, msg) {
   const jid = msg.key.remoteJid;
   const pushName = msg.pushName || 'desconocido';
 
-  // Detectar tipo de mensaje multimedia
   const isAudio = !!msg.message?.audioMessage;
   const isImage = !!msg.message?.imageMessage;
 
@@ -103,13 +102,12 @@ async function handleMessage(sock, msg) {
   console.log(`   ¿Es owner? ${ownerCheck ? '✅ SÍ' : '❌ NO'}`);
   if (!ownerCheck) return;
 
-  // ==================== TRANSCRIPCIÓN DE AUDIO (Opción B + validación) ====================
+  // ==================== TRANSCRIPCIÓN DE AUDIO (con contexto) ====================
   if (isAudio) {
     try {
       const transcription = await transcribeAudioMessage(msg, sock);
       const cleanText = (transcription || '').trim();
 
-      // Validación: si la transcripción es vacía o muy corta, pedir al usuario
       if (cleanText.length < 3) {
         console.log('   ⚠️  Transcripción vacía o muy corta');
         await sendText(
@@ -119,8 +117,9 @@ async function handleMessage(sock, msg) {
         return;
       }
 
-      text = cleanText;
-      console.log(`   ✅ Texto listo para LLM: "${text}"`);
+      // Envolver con contexto para que el LLM entienda que es una transcripción
+      text = `[El usuario envió una nota de voz que fue transcrita automáticamente. Contenido: "${cleanText}"]\n\nResponde directamente al contenido, NO comentes sobre la transcripción ni sobre tu capacidad de procesar audio.`;
+      console.log(`   ✅ Texto envuelto para LLM: "${text.slice(0, 150)}..."`);
     } catch (err) {
       console.error('Error transcribiendo:', err.message);
       await sendText(jid, '❌ No pude transcribir el audio. Intenta de nuevo.');
@@ -134,7 +133,6 @@ async function handleMessage(sock, msg) {
       const caption = msg.message.imageMessage?.caption || '';
       const analysis = await analyzeImageMessage(msg, sock, caption);
 
-      // Combinar caption del usuario + análisis de la imagen
       text = caption
         ? `${caption}\n\n[Contenido de la imagen]:\n${analysis}`
         : `[Contenido de la imagen]:\n${analysis}`;
