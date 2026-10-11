@@ -19,6 +19,7 @@ import {
 } from './syllabus/schedule.js';
 import { getCurrentWeek, getTopicForWeek } from './syllabus/topics.js';
 import { startCronJobs } from './cron/reminders.js';
+import { transcribeAudioMessage } from './services/audio/transcribe.js';
 import { createServer } from 'http';
 
 console.log('🤖 Athena Bot — Asistente Académico');
@@ -33,12 +34,43 @@ if (config.owners.length === 0 && config.ownerLids.length === 0) {
   console.warn('⚠️  OWNER_NUMBER / OWNER_LID no configurados.');
 }
 
+// --- Lista de comandos (para !help) ---
+const COMMANDS_HELP = `🤖 *Athena Bot* — Comandos disponibles:
+
+📅 *Académico*
+!hoy → Clases de hoy con temas
+!mañana → Clases de mañana
+!semana → Semana completa
+!próxima → Siguiente clase
+!tema → Temas de la semana actual
+
+📊 *Sistema*
+!ping → Estado de los 4 LLMs
+!stats → Estadísticas + progreso de estudio
+!reset → Borra historial
+!help → Esta ayuda
+
+🧪 *Debug*
+!test-reminder → Simula recordatorio 19:00
+!test-today → Simula recordatorio 07:00
+!test-week → Simula vista previa dominical
+
+🎤 *Voz*
+Envía una nota de voz → la transcribo automáticamente
+
+💡 También funciona:
+• Escribe "sí estudié" o "no estudié" para responder al recordatorio
+• Forzar proveedor: !groq, !gemini, !nvidia, !openrouter + pregunta`;
+
 // --- Handler de mensajes ---
 async function handleMessage(sock, msg) {
   const jid = msg.key.remoteJid;
   const pushName = msg.pushName || 'desconocido';
 
-  const text =
+  // Detectar audio
+  const isAudio = !!msg.message?.audioMessage;
+
+  let text =
     msg.message?.conversation ||
     msg.message?.extendedTextMessage?.text ||
     msg.message?.imageMessage?.caption ||
@@ -46,9 +78,9 @@ async function handleMessage(sock, msg) {
     '';
 
   console.log(`\n📩 [${pushName}] JID=${jid}`);
-  console.log(`   Texto: "${text}"`);
+  if (isAudio) console.log('   🎤 Es una nota de voz');
 
-  if (!text) return;
+  if (!text && !isAudio) return;
   if (!jid) return;
   if (jid.endsWith('@g.us')) return;
   if (jid === 'status@broadcast') return;
@@ -60,79 +92,49 @@ async function handleMessage(sock, msg) {
   console.log(`   ¿Es owner? ${ownerCheck ? '✅ SÍ' : '❌ NO'}`);
   if (!ownerCheck) return;
 
+  // ==================== TRANSCRIPCIÓN SILENCIOSA (Opción B) ====================
+  if (isAudio) {
+    try {
+      text = await transcribeAudioMessage(msg, sock);
+      // Opción B: sin mensajes intermedios — solo la respuesta final
+    } catch (err) {
+      console.error('Error transcribiendo:', err.message);
+      await sendText(jid, '❌ No pude transcribir el audio. Intenta de nuevo.');
+      return;
+    }
+  }
+
+  console.log(`   Texto: "${text}"`);
   const lower = text.trim().toLowerCase();
 
-  // ==================== RESPUESTAS A CONFIRMACIONES ====================
-  if (
-    lower === 'sí estudié' ||
-    lower === 'si estudie' ||
-    lower === 'sí' ||
-    lower === 'si' ||
-    lower === 'estudié' ||
-    lower === 'estudie' ||
-    lower === '✅'
-  ) {
+  // ==================== CONFIRMACIONES DE ESTUDIO ====================
+  if (['sí estudié', 'si estudie', 'sí', 'si', 'estudié', 'estudie', '✅'].includes(lower)) {
     const pending = getPendingStudyConfirmation(jid);
     if (pending) {
       answerStudyConfirmation(pending.id, true);
       const stats = getStudyStats(jid, 30);
       await humanDelay();
-      await sendText(
-        jid,
-        `💪 ¡Excelente! Anotado. Llevas *${stats.studied}/${stats.total}* días de estudio en los últimos 30 días.`
-      );
+      await sendText(jid, `💪 ¡Excelente! Anotado. Llevas *${stats.studied}/${stats.total}* días de estudio en los últimos 30 días.`);
       return;
     }
   }
 
-  if (
-    lower === 'no estudié' ||
-    lower === 'no estudie' ||
-    lower === 'no' ||
-    lower === '❌'
-  ) {
+  if (['no estudié', 'no estudie', 'no', '❌'].includes(lower)) {
     const pending = getPendingStudyConfirmation(jid);
     if (pending) {
       answerStudyConfirmation(pending.id, false);
       await humanDelay();
-      await sendText(
-        jid,
-        `😅 Bueno, aún tienes tiempo. Mañana te recuerdo de nuevo.`
-      );
+      await sendText(jid, `😅 Bueno, aún tienes tiempo. Mañana te recuerdo de nuevo.`);
       return;
     }
   }
 
   // ==================== COMANDOS ====================
-  if (lower === '!ping') {
-    await handlePing(jid);
-    return;
-  }
+  if (lower === '!ping') { await handlePing(jid); return; }
 
-  if (lower === '!help' || lower === '!ayuda') {
+  if (lower === '!help' || lower === '!ayuda' || lower === '!comandos') {
     await humanDelay();
-    await sendText(
-      jid,
-      `🤖 *Athena Bot* — Comandos:
-
-📅 *Académico*
-!hoy → Clases de hoy
-!mañana → Clases de mañana
-!semana → Semana completa
-!próxima → Siguiente clase
-!tema → Tema de la semana actual por curso
-
-📊 *Sistema*
-!ping → Estado de los 4 LLMs
-!stats → Estadísticas
-!reset → Borra historial
-!help → Esta ayuda
-
-🧪 *Debug*
-!test-reminder → Simula recordatorio de mañana
-!test-today → Simula recordatorio de hoy
-!test-week → Simula vista previa semanal`
-    );
+    await sendText(jid, COMMANDS_HELP);
     return;
   }
 
@@ -140,15 +142,12 @@ async function handleMessage(sock, msg) {
     await humanDelay();
     const s = getStats(jid);
     const study = getStudyStats(jid, 30);
-    await sendText(
-      jid,
-      `📊 *Estadísticas*
+    await sendText(jid, `📊 *Estadísticas*
 
 💬 Mensajes: ${s.messages}
 🧠 Hechos: ${s.facts}
 📝 Tareas pendientes: ${s.pendingTasks}
-📚 Estudio (30d): ${study.studied}/${study.total}`
-    );
+📚 Estudio (30d): ${study.studied}/${study.total}`);
     return;
   }
 
@@ -162,33 +161,21 @@ async function handleMessage(sock, msg) {
   if (lower === '!tema') {
     await humanDelay();
     const week = getCurrentWeek();
-    const courses = [
-      'contabilidad-financieras',
-      'comprension-ingles',
-      'solucion-problemas',
-      'analisis-eeff',
-      'auditoria',
-      'finanzas-privadas',
-    ];
+    const courses = ['contabilidad-financieras','comprension-ingles','solucion-problemas','analisis-eeff','auditoria','finanzas-privadas'];
     const lines = [`📚 *Temas de la semana ${week}*\n`];
     for (const key of courses) {
       const t = getTopicForWeek(key, week);
-      if (t) {
-        lines.push(`*${t.courseName}*`);
-        lines.push(`📖 ${t.topic}\n`);
-      }
+      if (t) { lines.push(`*${t.courseName}*`); lines.push(`📖 ${t.topic}\n`); }
     }
     await sendText(jid, lines.join('\n'));
     return;
   }
 
-  // ==================== COMANDOS ACADÉMICOS ====================
   if (lower === '!hoy') {
     await humanDelay();
     const classes = getToday();
-    if (classes.length === 0) {
-      await sendText(jid, '🎉 Hoy no tienes clases. ¡Descansa!');
-    } else {
+    if (classes.length === 0) { await sendText(jid, '🎉 Hoy no tienes clases. ¡Descansa!'); }
+    else {
       const week = getCurrentWeek();
       const lines = classes.map((c) => {
         const topic = getTopicForWeek(c.courseKey, week);
@@ -204,9 +191,8 @@ async function handleMessage(sock, msg) {
   if (lower === '!mañana' || lower === '!manana') {
     await humanDelay();
     const classes = getTomorrow();
-    if (classes.length === 0) {
-      await sendText(jid, '🎉 Mañana no tienes clases.');
-    } else {
+    if (classes.length === 0) { await sendText(jid, '🎉 Mañana no tienes clases.'); }
+    else {
       const week = getCurrentWeek() + 1;
       const lines = classes.map((c) => {
         const topic = getTopicForWeek(c.courseKey, week);
@@ -224,9 +210,7 @@ async function handleMessage(sock, msg) {
     const week = getWeek();
     const lines = week.map((d) => {
       if (d.classes.length === 0) return `*${d.dayLabel}* — sin clases`;
-      const items = d.classes
-        .map((c) => `  ${c.start}-${c.end} · ${c.course.short}`)
-        .join('\n');
+      const items = d.classes.map((c) => `  ${c.start}-${c.end} · ${c.course.short}`).join('\n');
       return `*${d.dayLabel}*\n${items}`;
     });
     await sendText(jid, `📅 *Semana académica*\n\n${lines.join('\n\n')}`);
@@ -236,20 +220,14 @@ async function handleMessage(sock, msg) {
   if (lower === '!proxima' || lower === '!próxima') {
     await humanDelay();
     const next = getNextClass();
-    if (!next) {
-      await sendText(jid, 'No hay clases próximas.');
-    } else {
-      const when =
-        next.when === 'hoy' ? 'Hoy' : next.when === 'mañana' ? 'Mañana' : next.when;
-      await sendText(
-        jid,
-        `📌 *Próxima clase*\n\n${when}\n⏰ ${next.start} - ${next.end}\n📚 ${next.course.name}\n👨‍🏫 ${next.course.teacher}`
-      );
+    if (!next) { await sendText(jid, 'No hay clases próximas.'); }
+    else {
+      const when = next.when === 'hoy' ? 'Hoy' : next.when === 'mañana' ? 'Mañana' : next.when;
+      await sendText(jid, `📌 *Próxima clase*\n\n${when}\n⏰ ${next.start} - ${next.end}\n📚 ${next.course.name}\n👨‍🏫 ${next.course.teacher}`);
     }
     return;
   }
 
-  // ==================== COMANDOS DE PRUEBA ====================
   if (lower === '!test-reminder') {
     await humanDelay();
     await sendText(jid, '⏳ Simulando recordatorio de mañana...');
@@ -278,17 +256,12 @@ async function handleMessage(sock, msg) {
   let preferred;
   let userText = text;
   const m = text.match(/^!(groq|gemini|nvidia|openrouter)\s+(.*)$/i);
-  if (m) {
-    preferred = m[1].toLowerCase();
-    userText = m[2];
-  }
+  if (m) { preferred = m[1].toLowerCase(); userText = m[2]; }
 
   try {
     saveMessage(jid, 'user', userText);
-
     const history = getRecentMessages(jid, config.memoryMaxShortTerm);
     const contextMessages = history.slice(0, -1);
-
     const messages = [
       { role: 'system', content: SYSTEM_PROMPT },
       ...contextMessages,
@@ -300,15 +273,10 @@ async function handleMessage(sock, msg) {
     const result = await askLLM(messages, { preferred });
 
     console.log(`   📝 Respuesta de ${result.provider} (${result.model})`);
-
-    saveMessage(jid, 'assistant', result.text, {
-      provider: result.provider,
-      model: result.model,
-    });
+    saveMessage(jid, 'assistant', result.text, { provider: result.provider, model: result.model });
 
     await humanDelay();
     await sendText(jid, result.text);
-
     console.log(`   ✅ Enviado a WhatsApp`);
   } catch (err) {
     console.error('❌ Error LLM:', err.message);
@@ -321,7 +289,6 @@ async function handleMessage(sock, msg) {
 async function handlePing(jid) {
   await sendText(jid, '🏓 Probando proveedores LLM...');
   const lines = [];
-
   for (const name of PROVIDERS_AVAILABLE) {
     try {
       const r = await pingProvider(name);
@@ -330,29 +297,25 @@ async function handlePing(jid) {
       lines.push(`❌ ${name} · ${err.message.slice(0, 80)}`);
     }
   }
-
   await sendText(jid, lines.join('\n'));
 }
 
-// --- Servidor HTTP para healthcheck ---
+// --- Servidor HTTP ---
 const PORT = process.env.PORT || 3000;
 const server = createServer((req, res) => {
   if (req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(
-      JSON.stringify({
-        status: 'ok',
-        service: 'athena-bot-whatsapp',
-        uptime: process.uptime(),
-        timestamp: new Date().toISOString(),
-      })
-    );
+    res.end(JSON.stringify({
+      status: 'ok',
+      service: 'athena-bot-whatsapp',
+      uptime: process.uptime(),
+      timestamp: new Date().toISOString(),
+    }));
   } else {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('Athena Bot WhatsApp — en línea');
   }
 });
-
 server.listen(PORT, () => {
   console.log(`🌐 Healthcheck HTTP escuchando en puerto ${PORT}`);
 });

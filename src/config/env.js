@@ -1,6 +1,11 @@
 import 'dotenv/config';
 
-const required = ['GEMINI_API_KEY', 'OPENROUTER_API_KEY'];
+const required = [
+  'GEMINI_API_KEY',
+  'OPENROUTER_API_KEY',
+  'SUPABASE_URL',
+  'SUPABASE_ANON_KEY',
+];
 
 const missing = required.filter((key) => !process.env[key]);
 if (missing.length > 0) {
@@ -42,7 +47,7 @@ export const config = {
   openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
   nvidiaApiKey: process.env.NVIDIA_API_KEY || '',
   defaultProvider: process.env.DEFAULT_LLM_PROVIDER || 'groq',
-  defaultModel: process.env.DEFAULT_LLM_MODEL || 'llama-3.3-70b-versatile',
+  defaultModel: process.env.DEFAULT_LLM_MODEL || 'openai/gpt-oss-120b',
 
   // Bot
   owners: parseOwners(process.env.OWNER_NUMBER),
@@ -53,6 +58,10 @@ export const config = {
   // Memoria
   memoryDbPath: process.env.MEMORY_DB_PATH || './data/athena.db',
   memoryMaxShortTerm: parseInt(process.env.MEMORY_MAX_SHORT_TERM || '20', 10),
+
+  // 🆕 Supabase (persistencia de sesión)
+  supabaseUrl: process.env.SUPABASE_URL || '',
+  supabaseAnonKey: process.env.SUPABASE_ANON_KEY || '',
 };
 
 // Delay anti-baneo con jitter

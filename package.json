@@ -13,7 +13,13 @@
   "engines": {
     "node": ">=22.0.0"
   },
-  "keywords": ["whatsapp", "bot", "baileys", "asistente", "academico"],
+  "keywords": [
+    "whatsapp",
+    "bot",
+    "baileys",
+    "asistente",
+    "academico"
+  ],
   "author": "Werner",
   "license": "MIT",
   "dependencies": {
@@ -23,6 +29,7 @@
     "better-sqlite3": "^13.0.3",
     "chalk": "^6.0.1",
     "dotenv": "^18.0.7",
+    "groq-sdk": "^1.6.0",
     "node-cron": "^4.6.0",
     "openai": "^7.32.0",
     "pino": "^10.4.0",

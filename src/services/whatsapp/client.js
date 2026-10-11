@@ -1,5 +1,4 @@
 import makeWASocket, {
-  useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
@@ -9,6 +8,7 @@ import makeWASocket, {
 import qrcode from 'qrcode-terminal';
 import pino from 'pino';
 import { config } from '../../config/env.js';
+import { useSupabaseAuthState } from './supabase-auth.js';
 
 const logger = pino({ level: config.logLevel });
 
@@ -23,12 +23,11 @@ export async function startWhatsApp(onMessage) {
   isStarting = true;
 
   try {
-    // Por ahora usamos sesión LOCAL (archivos) siempre.
-    // Más adelante migraremos a Supabase para producción.
-    const { state, saveCreds } = await useMultiFileAuthState('./data/session');
+    // 🔐 Sesión persistente en Supabase
+    const { state, saveCreds } = await useSupabaseAuthState();
     const { version } = await fetchLatestBaileysVersion();
 
-    logger.info(`📡 Baileys v${version.join('.')} | Sesión local: ./data/session`);
+    logger.info(`📡 Baileys v${version.join('.')} | Sesión: Supabase`);
 
     sock = makeWASocket({
       version,
@@ -45,7 +44,11 @@ export async function startWhatsApp(onMessage) {
       getMessage: async () => undefined,
     });
 
-    sock.ev.on('creds.update', saveCreds);
+    // 🔍 LOG: cuando Baileys dispara creds.update
+    sock.ev.on('creds.update', () => {
+      console.log('\n🔔 [EVENT] creds.update disparado por Baileys');
+      saveCreds();
+    });
 
     sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
@@ -80,7 +83,7 @@ export async function startWhatsApp(onMessage) {
           setTimeout(() => startWhatsApp(onMessage), 5000);
         } else {
           logger.error(
-            '❌ Sesión cerrada. Borra ./data/session y reinicia para volver a escanear el QR.'
+            '❌ Sesión cerrada. Borra la tabla "baileys_auth" en Supabase y reinicia.'
           );
         }
       }
@@ -107,31 +110,32 @@ export async function startWhatsApp(onMessage) {
 
         console.log(`   📨 De: ${fromJid} | fromMe: ${fromMe} | id: ${msgId} | contenido: [${msgKeys}]`);
 
-        // Ignorar si no tiene contenido
         if (!hasMessage) continue;
 
-        // Ignorar mensajes propios
         if (fromMe) {
           console.log('   ⏭️  Ignorado (es propio)');
           continue;
         }
 
-        // Ignorar grupos
         if (fromJid.endsWith('@g.us')) {
           console.log('   ⏭️  Ignorado (es grupo)');
           continue;
         }
 
-        // 🛡️ Anti-duplicado: ignorar mensajes ya procesados
+        // 🆕 Ignorar mensajes históricos (type=append) — solo procesar nuevos
+        if (type === 'append') {
+          console.log('   ⏭️  Ignorado (mensaje histórico)');
+          continue;
+        }
+
+        // 🛡️ Anti-duplicado
         if (msgId && processedIds.has(msgId)) {
           console.log('   ⏭️  Ignorado (ya procesado antes)');
           continue;
         }
 
-        // Marcar como procesado
         if (msgId) {
           processedIds.add(msgId);
-          // Limitar tamaño del Set (evitar crecer indefinidamente)
           if (processedIds.size > MAX_CACHE) {
             const first = processedIds.values().next().value;
             processedIds.delete(first);
