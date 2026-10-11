@@ -39,7 +39,7 @@ const MODELS = {
   groq: 'openai/gpt-oss-120b', 
   nvidia: 'nvidia/nemotron-3-ultra-550b-a55b',
   openrouter: 'openrouter/free',
-  gemini: 'gemini-2.5-flash-lite',
+  gemini: 'gemini-3.5-flash-lite',
 };
 
 // ---------- Funciones de chat por proveedor ----------

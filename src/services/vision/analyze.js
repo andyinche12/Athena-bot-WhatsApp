@@ -4,6 +4,10 @@ import { config } from '../../config/env.js';
 
 const gemini = new GoogleGenAI({ apiKey: config.geminiApiKey });
 
+// Modelos confirmados disponibles en la cuenta (verificado con list-gemini-models.js)
+const MODEL_PRIMARY = 'gemini-3.8-flash';
+const MODEL_FALLBACK = 'gemini-3.5-flash-lite';
+
 const DEFAULT_PROMPT = `Analiza esta imagen con máximo detalle. Sigue estos pasos:
 
 1. Si contiene texto manuscrito o impreso, transcríbelo LITERALMENTE y completo.
@@ -14,34 +18,27 @@ const DEFAULT_PROMPT = `Analiza esta imagen con máximo detalle. Sigue estos pas
 
 /**
  * Descarga y analiza una imagen de WhatsApp usando Gemini Vision.
- * @param {Object} msg - Mensaje de Baileys
- * @param {Object} sock - Socket de Baileys
- * @param {string} userCaption - Caption del usuario (opcional)
- * @returns {Promise<string>} Análisis/transcripción de la imagen
  */
 export async function analyzeImageMessage(msg, sock, userCaption = '') {
+  // 1. Descargar imagen (una sola vez)
+  console.log('   🖼️  Descargando imagen...');
+  const buffer = await downloadMediaMessage(
+    msg,
+    'buffer',
+    {},
+    { logger: console, reuploadRequest: sock.updateMediaMessage }
+  );
+  console.log(`   💾 Imagen: ${(buffer.length / 1024).toFixed(1)} KB`);
+
+  const base64 = buffer.toString('base64');
+  const mimeType = msg.message.imageMessage?.mimetype || 'image/jpeg';
+  const prompt = userCaption?.trim() || DEFAULT_PROMPT;
+
+  // 2. Intentar con modelo principal
   try {
-    // 1. Descargar imagen
-    console.log('   🖼️  Descargando imagen...');
-    const buffer = await downloadMediaMessage(
-      msg,
-      'buffer',
-      {},
-      { logger: console, reuploadRequest: sock.updateMediaMessage }
-    );
-    console.log(`   💾 Imagen: ${(buffer.length / 1024).toFixed(1)} KB`);
-
-    // 2. Convertir a base64
-    const base64 = buffer.toString('base64');
-    const mimeType = msg.message.imageMessage?.mimetype || 'image/jpeg';
-
-    // 3. Prompt: caption del usuario o prompt por defecto
-    const prompt = userCaption?.trim() || DEFAULT_PROMPT;
-
-    // 4. Llamar a Gemini Vision
-    console.log('   👁️  Analizando con Gemini Vision...');
+    console.log(`   👁️  Analizando con ${MODEL_PRIMARY}...`);
     const response = await gemini.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: MODEL_PRIMARY,
       contents: [
         {
           role: 'user',
@@ -62,41 +59,49 @@ export async function analyzeImageMessage(msg, sock, userCaption = '') {
       response.candidates?.[0]?.content?.parts?.[0]?.text ||
       '';
 
-    console.log(`   ✅ Análisis: ${text.length} chars`);
+    if (text.trim().length < 5) {
+      throw new Error('Respuesta vacía del modelo principal');
+    }
+
+    console.log(`   ✅ Análisis (${text.length} chars)`);
     return text.trim();
   } catch (err) {
-    console.error('❌ Error analizando imagen:', err.message);
-    // Fallback: intentar con gemini-2.5-flash-lite si flash falla
-    if (err.message?.includes('not found') || err.message?.includes('404')) {
-      console.log('   🔄 Reintentando con gemini-2.5-flash-lite...');
-      try {
-        const base64 = (await downloadMediaMessage(msg, 'buffer', {}, {
-          logger: console,
-          reuploadRequest: sock.updateMediaMessage,
-        })).toString('base64');
-        const mimeType = msg.message.imageMessage?.mimetype || 'image/jpeg';
-        const prompt = userCaption?.trim() || DEFAULT_PROMPT;
+    console.error(`   ⚠️  ${MODEL_PRIMARY} falló:`, err.message);
 
-        const response = await gemini.models.generateContent({
-          model: 'gemini-2.5-flash-lite',
-          contents: [{
+    // 3. Fallback al modelo lite
+    try {
+      console.log(`   🔄 Reintentando con ${MODEL_FALLBACK}...`);
+      const response = await gemini.models.generateContent({
+        model: MODEL_FALLBACK,
+        contents: [
+          {
             role: 'user',
             parts: [
               { text: prompt },
               { inlineData: { mimeType, data: base64 } },
             ],
-          }],
-          config: { temperature: 0.3, maxOutputTokens: 2048 },
-        });
+          },
+        ],
+        config: {
+          temperature: 0.3,
+          maxOutputTokens: 2048,
+        },
+      });
 
-        const text = response.text || response.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        console.log(`   ✅ Análisis (fallback): ${text.length} chars`);
-        return text.trim();
-      } catch (err2) {
-        console.error('   ❌ Fallback también falló:', err2.message);
-        throw err2;
+      const text =
+        response.text ||
+        response.candidates?.[0]?.content?.parts?.[0]?.text ||
+        '';
+
+      if (text.trim().length < 5) {
+        throw new Error('Respuesta vacía del modelo fallback');
       }
+
+      console.log(`   ✅ Análisis fallback (${text.length} chars)`);
+      return text.trim();
+    } catch (err2) {
+      console.error(`   ❌ Fallback también falló:`, err2.message);
+      throw new Error('No se pudo analizar la imagen con Gemini');
     }
-    throw err;
   }
 }
