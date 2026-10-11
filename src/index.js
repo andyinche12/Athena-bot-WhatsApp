@@ -20,6 +20,7 @@ import {
 import { getCurrentWeek, getTopicForWeek } from './syllabus/topics.js';
 import { startCronJobs } from './cron/reminders.js';
 import { transcribeAudioMessage } from './services/audio/transcribe.js';
+import { analyzeImageMessage } from './services/vision/analyze.js';
 import { createServer } from 'http';
 
 console.log('🤖 Athena Bot — Asistente Académico');
@@ -55,8 +56,16 @@ const COMMANDS_HELP = `🤖 *Athena Bot* — Comandos disponibles:
 !test-today → Simula recordatorio 07:00
 !test-week → Simula vista previa dominical
 
-🎤 *Voz*
+🎤 *Audio*
 Envía una nota de voz → la transcribo automáticamente
+
+🖼️ *Imágenes*
+Envía una foto (con o sin caption) → la analizo y respondo
+Ejemplos de captions:
+  • "resuélvelo"
+  • "pásalo a texto"
+  • "explícame esto"
+  • "hazme un resumen de estudio"
 
 💡 También funciona:
 • Escribe "sí estudié" o "no estudié" para responder al recordatorio
@@ -67,8 +76,9 @@ async function handleMessage(sock, msg) {
   const jid = msg.key.remoteJid;
   const pushName = msg.pushName || 'desconocido';
 
-  // Detectar audio
+  // Detectar tipo de mensaje multimedia
   const isAudio = !!msg.message?.audioMessage;
+  const isImage = !!msg.message?.imageMessage;
 
   let text =
     msg.message?.conversation ||
@@ -79,8 +89,9 @@ async function handleMessage(sock, msg) {
 
   console.log(`\n📩 [${pushName}] JID=${jid}`);
   if (isAudio) console.log('   🎤 Es una nota de voz');
+  if (isImage) console.log('   🖼️  Es una imagen');
 
-  if (!text && !isAudio) return;
+  if (!text && !isAudio && !isImage) return;
   if (!jid) return;
   if (jid.endsWith('@g.us')) return;
   if (jid === 'status@broadcast') return;
@@ -92,11 +103,24 @@ async function handleMessage(sock, msg) {
   console.log(`   ¿Es owner? ${ownerCheck ? '✅ SÍ' : '❌ NO'}`);
   if (!ownerCheck) return;
 
-  // ==================== TRANSCRIPCIÓN SILENCIOSA (Opción B) ====================
+  // ==================== TRANSCRIPCIÓN DE AUDIO (Opción B + validación) ====================
   if (isAudio) {
     try {
-      text = await transcribeAudioMessage(msg, sock);
-      // Opción B: sin mensajes intermedios — solo la respuesta final
+      const transcription = await transcribeAudioMessage(msg, sock);
+      const cleanText = (transcription || '').trim();
+
+      // Validación: si la transcripción es vacía o muy corta, pedir al usuario
+      if (cleanText.length < 3) {
+        console.log('   ⚠️  Transcripción vacía o muy corta');
+        await sendText(
+          jid,
+          '🤔 No pude entender bien tu nota de voz. ¿Puedes repetirla más despacio o escribirme el mensaje? 🙏'
+        );
+        return;
+      }
+
+      text = cleanText;
+      console.log(`   ✅ Texto listo para LLM: "${text}"`);
     } catch (err) {
       console.error('Error transcribiendo:', err.message);
       await sendText(jid, '❌ No pude transcribir el audio. Intenta de nuevo.');
@@ -104,7 +128,24 @@ async function handleMessage(sock, msg) {
     }
   }
 
-  console.log(`   Texto: "${text}"`);
+  // ==================== ANÁLISIS DE IMAGEN ====================
+  if (isImage) {
+    try {
+      const caption = msg.message.imageMessage?.caption || '';
+      const analysis = await analyzeImageMessage(msg, sock, caption);
+
+      // Combinar caption del usuario + análisis de la imagen
+      text = caption
+        ? `${caption}\n\n[Contenido de la imagen]:\n${analysis}`
+        : `[Contenido de la imagen]:\n${analysis}`;
+    } catch (err) {
+      console.error('Error analizando imagen:', err.message);
+      await sendText(jid, '❌ No pude analizar la imagen. Intenta de nuevo.');
+      return;
+    }
+  }
+
+  console.log(`   Texto: "${text.slice(0, 200)}${text.length > 200 ? '...' : ''}"`);
   const lower = text.trim().toLowerCase();
 
   // ==================== CONFIRMACIONES DE ESTUDIO ====================
@@ -255,7 +296,7 @@ async function handleMessage(sock, msg) {
   // ==================== LLM NORMAL ====================
   let preferred;
   let userText = text;
-  const m = text.match(/^!(groq|gemini|nvidia|openrouter)\s+(.*)$/i);
+  const m = text.match(/^!(groq|gemini|nvidia|openrouter)\s+(.*)$/is);
   if (m) { preferred = m[1].toLowerCase(); userText = m[2]; }
 
   try {

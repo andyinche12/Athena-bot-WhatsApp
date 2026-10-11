@@ -36,15 +36,17 @@ export async function transcribeAudioMessage(msg, sock) {
     // Usamos createReadStream porque groq-sdk NO acepta Blob directamente
     console.log('   🎙️ Transcribiendo con Whisper...');
     const transcription = await groq.audio.transcriptions.create({
-      file: createReadStream(tmpPath),     // ✅ ReadStream en vez de Blob
+      file: createReadStream(tmpPath),
       model: 'whisper-large-v3-turbo',
       language: 'es',
       response_format: 'json',
       temperature: 0.0,
+      // Prompt con contexto académico para mejorar precisión de términos técnicos
+      prompt: 'Contenido académico de contabilidad, finanzas, auditoría. Hablante peruano.',
     });
 
     const text = transcription.text || '';
-    console.log(`   ✅ Transcripción: "${text}"`);
+    console.log(`   ✅ Transcripción (${text.length} chars): "${text}"`);
     return text;
   } catch (err) {
     console.error('❌ Error transcribiendo audio:', err.message);
