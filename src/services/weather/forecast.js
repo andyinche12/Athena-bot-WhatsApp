@@ -2,11 +2,18 @@
  * Clima para Junín (Huancayo) usando Open-Meteo.
  * API gratuita, sin key, sin límites prácticos.
  * Docs: https://open-meteo.com/en/docs
+ *
+ * v2: añadido timeout, retry, y logs detallados de errores.
  */
 
 const LAT = -11.15;
 const LON = -75.99;
 const TZ = 'America/Lima';
+
+// Timeout para fetch (8 segundos)
+const FETCH_TIMEOUT_MS = 8000;
+// Reintentos máximos
+const MAX_RETRIES = 2;
 
 // Códigos WMO → descripción + emoji
 const WEATHER_CODES = {
@@ -38,33 +45,80 @@ function codeInfo(code) {
 }
 
 /**
+ * Fetch con timeout usando AbortController.
+ */
+async function fetchWithTimeout(url, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    return res;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Obtiene el clima de hoy y mañana para Junín, con granularidad por franja.
+ * Reintenta hasta MAX_RETRIES veces si falla.
  * @returns {Promise<{hoy: object, manana: object} | null>}
  */
 export async function getWeather() {
-  try {
-    const url =
-      `https://api.open-meteo.com/v1/forecast?` +
-      `latitude=${LAT}&longitude=${LON}` +
-      `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max` +
-      `&hourly=weather_code,temperature_2m,precipitation_probability` +
-      `&timezone=${encodeURIComponent(TZ)}` +
-      `&forecast_days=3`;
+  const url =
+    `https://api.open-meteo.com/v1/forecast?` +
+    `latitude=${LAT}&longitude=${LON}` +
+    `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max` +
+    `&hourly=weather_code,temperature_2m,precipitation_probability` +
+    `&timezone=${encodeURIComponent(TZ)}` +
+    `&forecast_days=3`;
 
-    const res = await fetch(url);
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
+  console.log('🌤️ [Weather] Consultando Open-Meteo...');
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const t0 = Date.now();
+
+    try {
+      const res = await fetchWithTimeout(url, FETCH_TIMEOUT_MS);
+      const elapsed = Date.now() - t0;
+
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status} ${res.statusText}`);
+      }
+
+      const data = await res.json();
+
+      // Validar estructura mínima
+      if (!data.daily || !data.hourly || !data.daily.weather_code) {
+        throw new Error('Respuesta inválida de Open-Meteo (faltan campos)');
+      }
+
+      const hoy = buildDayInfo(data, 0);
+      const manana = buildDayInfo(data, 1);
+
+      console.log(`   ✅ Open-Meteo OK (${elapsed}ms, intento ${attempt})`);
+      return { hoy, manana };
+    } catch (err) {
+      const elapsed = Date.now() - t0;
+      const isAbort = err.name === 'AbortError';
+      const reason = isAbort ? 'TIMEOUT' : err.message;
+
+      console.error(
+        `   ⚠️  Intento ${attempt}/${MAX_RETRIES} falló (${elapsed}ms): ${reason}`
+      );
+
+      // Si es el último intento, dar up
+      if (attempt === MAX_RETRIES) {
+        console.error('   ❌ Open-Meteo falló todos los intentos');
+        return null;
+      }
+
+      // Esperar antes de reintentar (backoff: 500ms, 1000ms)
+      await new Promise((r) => setTimeout(r, attempt * 500));
     }
-    const data = await res.json();
-
-    const hoy = buildDayInfo(data, 0);
-    const manana = buildDayInfo(data, 1);
-
-    return { hoy, manana };
-  } catch (err) {
-    console.error('⚠️  Error obteniendo clima:', err.message);
-    return null;
   }
+
+  return null;
 }
 
 /**
@@ -80,7 +134,6 @@ function buildDayInfo(data, dayOffset) {
   const rainProb = daily.precipitation_probability_max[dayOffset];
   const info = codeInfo(code);
 
-  // Helper para extraer una franja horaria específica
   const getSlot = (hour) => {
     const idx = dayOffset * 24 + hour;
     const c = hourly.weather_code[idx];
@@ -97,18 +150,18 @@ function buildDayInfo(data, dayOffset) {
     tempMin: tMin,
     tempMax: tMax,
     rainProb,
-    // Franjas horarias
-    morning: getSlot(7),     // 07:00
-    noon: getSlot(12),       // 12:00
-    afternoon: getSlot(15),  // 15:00
-    evening: getSlot(19),    // 19:00
-    night: getSlot(22),      // 22:00
+    morning: getSlot(7),
+    noon: getSlot(12),
+    afternoon: getSlot(15),
+    evening: getSlot(19),
+    night: getSlot(22),
   };
 }
 
-/**
- * Formatea el clima de la MAÑANA para WhatsApp.
- */
+/* ============================================================
+ *  Formateadores
+ * ============================================================ */
+
 export function formatWeatherMorning(weather) {
   if (!weather) return null;
 
@@ -128,9 +181,6 @@ export function formatWeatherMorning(weather) {
   return lines.join('\n');
 }
 
-/**
- * Formatea el clima del MEDIODÍA + TARDE para WhatsApp.
- */
 export function formatWeatherMidday(weather) {
   if (!weather) return null;
 
@@ -151,9 +201,6 @@ export function formatWeatherMidday(weather) {
   return lines.join('\n');
 }
 
-/**
- * Formatea el clima de la NOCHE + MAÑANA SIGUIENTE para WhatsApp.
- */
 export function formatWeatherEvening(weather) {
   if (!weather) return null;
 
@@ -174,9 +221,6 @@ export function formatWeatherEvening(weather) {
   return lines.join('\n');
 }
 
-/**
- * Formatea el clima de MAÑANA completo para WhatsApp (versión breve).
- */
 export function formatWeatherTomorrow(weather) {
   if (!weather) return null;
 
