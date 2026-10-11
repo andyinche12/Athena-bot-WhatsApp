@@ -351,3 +351,60 @@ export async function getFlashcardStats(chatId) {
 
   return { total, mastered, toReview: total - mastered };
 }
+
+/* ============================================================
+ *  GASTOS
+ * ============================================================ */
+
+export async function createExpense(chatId, { amount, description, category }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const { data, error } = await supabase
+    .from('athena_expenses')
+    .insert({
+      chat_id: chatId,
+      amount,
+      description,
+      category,
+      date: today,
+      created_at: Date.now(),
+    })
+    .select('id')
+    .single();
+
+  if (error) {
+    console.error('createExpense error:', error.message);
+    return null;
+  }
+  return data?.id;
+}
+
+export async function getExpenses(chatId, filter = {}) {
+  let query = supabase
+    .from('athena_expenses')
+    .select('id, amount, description, category, date, created_at')
+    .eq('chat_id', chatId);
+
+  if (filter.date) query = query.eq('date', filter.date);
+  if (filter.fromDate) query = query.gte('date', filter.fromDate);
+  if (filter.toDate) query = query.lte('date', filter.toDate);
+
+  const { data, error } = await query.order('created_at', { ascending: false });
+
+  if (error) return [];
+  return data || [];
+}
+
+export async function getExpensesSum(chatId, filter = {}) {
+  const exps = await getExpenses(chatId, filter);
+  const total = exps.reduce((s, e) => s + Number(e.amount || 0), 0);
+  const byCategory = {};
+  for (const e of exps) {
+    byCategory[e.category] = (byCategory[e.category] || 0) + Number(e.amount);
+  }
+  return { total, count: exps.length, byCategory, expenses: exps };
+}
+
+export async function deleteExpense(id) {
+  const { error } = await supabase.from('athena_expenses').delete().eq('id', id);
+  return !error;
+}

@@ -19,6 +19,10 @@ import {
   updateFlashcardStats,
   deleteFlashcard,
   getFlashcardStats,
+  createExpense,
+  getExpenses,
+  getExpensesSum,
+  deleteExpense,
 } from './memory/store.js';
 import {
   getToday,
@@ -32,6 +36,11 @@ import { transcribeAudioMessage } from './services/audio/transcribe.js';
 import { textToSpeech } from './services/audio/tts.js';
 import { analyzeImageMessage } from './services/vision/analyze.js';
 import { parseTaskInput, formatDueDate } from './services/tasks/parser.js';
+import {
+  parseExpense,
+  formatAmount,
+  formatCategory,
+} from './services/expenses/parser.js';
 import {
   isInPomodoro,
   getPomodoro,
@@ -88,6 +97,17 @@ const HELP_FULL = `🤖 *Athena Bot — Comandos*
 !quiz 10 → Quiz de 10 preguntas
 !borrar-flashcard <n> → Eliminar una
 
+💰 *GASTOS*
+!gasto <monto> <descripción> → Registrar
+!gasto 25 almuerzo → Auto-categoriza
+!gasto 30 libro | estudio → Categoría explícita
+!gastos → Gastos de hoy
+!gastos-semana → Semana
+!gastos-mes → Mes
+!borrar-gasto <n> → Eliminar
+
+_Categorías: comida, transporte, estudio, ocio, salud, hogar, otros_
+
 ⏱️ *POMODORO*
 !pomodoro → 25 min foco + 5 descanso × 4 rondas
 !pomodoro 45 10 3 → Custom (45/10 × 3)
@@ -137,6 +157,10 @@ const HELP_SHORT = `🤖 *Comandos básicos* (escribe !help para ver todos)
 🎴 *Estudio*
 !flashcard pregunta | respuesta → Crear tarjeta
 !quiz → Quiz rápido
+
+💰 *Gastos*
+!gasto 25 almuerzo → Registrar
+!gastos → Ver gastos de hoy
 
 ⏱️ *Foco*
 !pomodoro → Iniciar 25 min
@@ -593,6 +617,134 @@ async function handleMessage(sock, msg) {
     return;
   }
 
+  // ==================== GASTOS ====================
+  if (lower.startsWith('!gasto ') || lower.startsWith('!g ')) {
+    const start = lower.startsWith('!gasto ') ? 7 : 3;
+    const input = text.slice(start).trim();
+
+    const parsed = parseExpense(input);
+    if (parsed.error) {
+      await sendText(
+        jid,
+        `❌ ${parsed.error}\n\n*Ejemplos:*\n• \`!gasto 25 almuerzo\`\n• \`!gasto 15.50 taxi\`\n• \`!gasto 30 libro | estudio\``
+      );
+      return;
+    }
+
+    const id = await createExpense(jid, parsed);
+    if (!id) {
+      await sendText(jid, '❌ No pude guardar el gasto.');
+      return;
+    }
+
+    await humanDelay();
+    await sendText(
+      jid,
+      `💰 Gasto #${id} registrado\n\n` +
+      `💵 *${formatAmount(parsed.amount)}*\n` +
+      `📝 ${parsed.description}\n` +
+      `${formatCategory(parsed.category)}`
+    );
+    return;
+  }
+
+  if (lower === '!gastos' || lower === '!gastos-hoy' || lower === '!gastos-dia') {
+    const today = new Date().toISOString().slice(0, 10);
+    const data = await getExpensesSum(jid, { date: today });
+
+    await humanDelay();
+
+    if (data.count === 0) {
+      await sendText(jid, '✨ No has registrado gastos hoy, mi amor.');
+      return;
+    }
+
+    const lines = [`💰 *Gastos de hoy*\n`];
+    for (const e of data.expenses.slice(0, 15)) {
+      lines.push(`• *${formatAmount(e.amount)}* — ${e.description} ${formatCategory(e.category)}`);
+    }
+    lines.push(`\n💵 *Total: ${formatAmount(data.total)}* (${data.count} gasto${data.count !== 1 ? 's' : ''})`);
+
+    await sendText(jid, lines.join('\n'));
+    return;
+  }
+
+  if (lower === '!gastos-semana') {
+    const today = new Date();
+    const from = new Date(today);
+    from.setDate(today.getDate() - 6);
+
+    const data = await getExpensesSum(jid, {
+      fromDate: from.toISOString().slice(0, 10),
+      toDate: today.toISOString().slice(0, 10),
+    });
+
+    await humanDelay();
+
+    if (data.count === 0) {
+      await sendText(jid, '✨ No has registrado gastos esta semana.');
+      return;
+    }
+
+    const lines = [`💰 *Gastos de la semana*\n`];
+    lines.push(`💵 *Total: ${formatAmount(data.total)}* (${data.count} gastos)\n`);
+    lines.push(`*Por categoría:*`);
+    for (const [cat, sum] of Object.entries(data.byCategory).sort((a, b) => b[1] - a[1])) {
+      lines.push(`${formatCategory(cat)}: ${formatAmount(sum)}`);
+    }
+
+    await sendText(jid, lines.join('\n'));
+    return;
+  }
+
+  if (lower === '!gastos-mes' || lower === '!gastos-mensual') {
+    const today = new Date();
+    const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
+
+    const data = await getExpensesSum(jid, {
+      fromDate: firstDay.toISOString().slice(0, 10),
+      toDate: today.toISOString().slice(0, 10),
+    });
+
+    await humanDelay();
+
+    if (data.count === 0) {
+      await sendText(jid, '✨ No has registrado gastos este mes.');
+      return;
+    }
+
+    const monthName = today.toLocaleDateString('es-PE', { month: 'long', year: 'numeric' });
+
+    const lines = [`💰 *Gastos de ${monthName}*\n`];
+    lines.push(`💵 *Total: ${formatAmount(data.total)}* (${data.count} gastos)\n`);
+    lines.push(`*Por categoría:*`);
+
+    const sorted = Object.entries(data.byCategory).sort((a, b) => b[1] - a[1]);
+    for (const [cat, sum] of sorted) {
+      const pct = Math.round((sum / data.total) * 100);
+      lines.push(`${formatCategory(cat)}: ${formatAmount(sum)} (${pct}%)`);
+    }
+
+    await sendText(jid, lines.join('\n'));
+    return;
+  }
+
+  if (lower.startsWith('!borrar-gasto ') || lower.startsWith('!del-g ')) {
+    const start = lower.startsWith('!borrar-gasto ') ? 14 : 7;
+    const idStr = text.slice(start).trim();
+    const id = parseInt(idStr, 10);
+
+    if (isNaN(id)) {
+      await sendText(jid, '❌ Uso: `!borrar-gasto <id>`');
+      return;
+    }
+
+    const ok = await deleteExpense(id);
+    await humanDelay();
+    await sendText(jid, ok ? `🗑️ Gasto #${id} eliminado.` : `❌ No encontré el gasto #${id}.`);
+    return;
+  }
+
   // ==================== SISTEMA ====================
   if (lower === '!ping') { await handlePing(jid); return; }
 
@@ -765,17 +917,12 @@ async function handleMessage(sock, msg) {
   }
 
   // ==================== MANEJO DE RESPUESTAS DE QUIZ ====================
-  // Va ANTES del LLM y DESPUÉS de todos los comandos.
-  // Solo actúa si hay un quiz activo Y el mensaje no empieza con "!"
   if (hasActiveQuiz(jid) && !lower.startsWith('!')) {
     const q = nextQuestion(jid);
 
     if (!q) {
-      // Sin más preguntas, cerrar el quiz
       endQuiz(jid);
-      // Fall through → va al LLM
     } else {
-      // Comando especial: pista
       if (lower === 'pista' || lower === 'hint' || lower === '?') {
         const expected = q.flashcard.answer;
         const firstWords = expected.split(/\s+/).slice(0, 3).join(' ');
@@ -784,7 +931,6 @@ async function handleMessage(sock, msg) {
         return;
       }
 
-      // Comando especial: saltar
       if (lower === 'saltar' || lower === 'skip' || lower === 'no sé' || lower === 'no se') {
         recordAnswer(jid, false);
         await updateFlashcardStats(q.flashcard.id, false);
@@ -814,7 +960,6 @@ async function handleMessage(sock, msg) {
         return;
       }
 
-      // Respuesta normal
       const result = checkAnswer(text, q.flashcard.answer);
       recordAnswer(jid, result.correct);
       await updateFlashcardStats(q.flashcard.id, result.correct);
