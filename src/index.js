@@ -13,6 +13,12 @@ import {
   createTask,
   getPendingTasks,
   completeTask,
+  createFlashcard,
+  getFlashcards,
+  getRandomFlashcards,
+  updateFlashcardStats,
+  deleteFlashcard,
+  getFlashcardStats,
 } from './memory/store.js';
 import {
   getToday,
@@ -32,6 +38,16 @@ import {
   startPomodoro,
   stopPomodoro,
 } from './services/pomodoro/manager.js';
+import {
+  hasActiveQuiz,
+  getActiveQuiz,
+  startQuiz,
+  endQuiz,
+  checkAnswer,
+  nextQuestion,
+  recordAnswer,
+  getQuizSummary,
+} from './services/flashcards/quiz.js';
 import { createServer } from 'http';
 
 console.log('🤖 Athena Bot — Asistente Académico');
@@ -64,19 +80,26 @@ const HELP_FULL = `🤖 *Athena Bot — Comandos*
 !tarea <texto> para el viernes → Con fecha
 !pendientes → Ver tareas pendientes
 !completar <n> → Marcar como hecha
-!limpiar-tareas → Borrar todas las completadas
+
+🎴 *FLASHCARDS Y QUIZ*
+!flashcard pregunta | respuesta → Crear tarjeta
+!flashcards → Listar todas
+!quiz → Quiz de 5 preguntas aleatorias
+!quiz 10 → Quiz de 10 preguntas
+!borrar-flashcard <n> → Eliminar una
 
 ⏱️ *POMODORO*
-!pomodoro → 25 min estudio + 5 descanso × 4 rondas
-!pomodoro 45 10 3 → Custom (45/10 × 3 rondas)
+!pomodoro → 25 min foco + 5 descanso × 4 rondas
+!pomodoro 45 10 3 → Custom (45/10 × 3)
 !pomodoro-estado → Ver sesión activa
 !pomodoro-stop → Cancelar sesión
 
 🌤️ *CLIMA*
-!clima (o !c) → Clima hoy y mañana
+!clima (o !c) → Clima completo por franjas
 
 📊 *SISTEMA*
 !stats → Estadísticas + progreso
+!resumen-semana → Reporte semanal
 !ping → Estado de los 4 LLMs
 !reset → Borra historial
 !help → Esta ayuda
@@ -92,14 +115,13 @@ Envía una foto (con o sin caption) → la analizo
 
 ✅ *ESTUDIO*
 "sí estudié" / "no estudié" → Responder al recordatorio
-!stats → Ver tu progreso
 
 🧪 *DEBUG*
 !test-today → Simula recordatorio 07:00
 !test-midday → Simula clima mediodía
 !test-reminder → Simula recordatorio 19:00
 !test-review → Simula repaso nocturno
-!test-week → Simula vista previa semanal`;
+!test-week → Simula resumen semanal`;
 
 const HELP_SHORT = `🤖 *Comandos básicos* (escribe !help para ver todos)
 
@@ -111,6 +133,10 @@ const HELP_SHORT = `🤖 *Comandos básicos* (escribe !help para ver todos)
 📝 *Tareas*
 !tarea <texto> → Guardar
 !pendientes → Ver pendientes
+
+🎴 *Estudio*
+!flashcard pregunta | respuesta → Crear tarjeta
+!quiz → Quiz rápido
 
 ⏱️ *Foco*
 !pomodoro → Iniciar 25 min
@@ -376,7 +402,6 @@ async function handleMessage(sock, msg) {
       return;
     }
 
-    // Parsear argumentos custom: !pomodoro 45 10 3
     const args = text.slice(9).trim().split(/\s+/).filter(Boolean);
     let work = 25, brk = 5, rounds = 4;
 
@@ -428,6 +453,146 @@ async function handleMessage(sock, msg) {
     return;
   }
 
+  // ==================== FLASHCARDS ====================
+  if (lower.startsWith('!flashcard ') || lower.startsWith('!fc ')) {
+    const start = lower.startsWith('!flashcard ') ? 11 : 4;
+    const input = text.slice(start).trim();
+
+    if (!input || !input.includes('|')) {
+      await sendText(
+        jid,
+        '❌ Uso: `!flashcard pregunta | respuesta`\n\nEjemplo:\n!flashcard ¿Qué es el encaje bancario? | Reserva obligatoria en el BCRP, 4-6% de depósitos'
+      );
+      return;
+    }
+
+    const [question, ...answerParts] = input.split('|');
+    const answer = answerParts.join('|').trim();
+
+    if (!question.trim() || !answer) {
+      await sendText(jid, '❌ Necesito pregunta y respuesta separadas por `|`');
+      return;
+    }
+
+    try {
+      const id = await createFlashcard(jid, question.trim(), answer);
+      await humanDelay();
+      await sendText(
+        jid,
+        `🎴 Flashcard #${id} guardada\n\n*P:* ${question.trim()}\n*R:* ${answer}`
+      );
+    } catch (err) {
+      console.error('Error creando flashcard:', err.message);
+      await sendText(jid, '❌ No pude guardar la flashcard.');
+    }
+    return;
+  }
+
+  if (lower === '!flashcards' || lower === '!tarjetas') {
+    try {
+      const cards = await getFlashcards(jid);
+
+      if (cards.length === 0) {
+        await humanDelay();
+        await sendText(jid, '✨ No tienes flashcards todavía, mi amor.\n\nCrea una con:\n`!flashcard pregunta | respuesta`');
+        return;
+      }
+
+      const stats = await getFlashcardStats(jid);
+      const lines = [`🎴 *Tus flashcards (${stats.total})*\n`];
+      lines.push(`✅ Dominadas: ${stats.mastered}`);
+      lines.push(`📚 Por repasar: ${stats.toReview}\n`);
+
+      for (const c of cards.slice(0, 10)) {
+        const accuracy = c.times_shown > 0
+          ? Math.round((c.times_right / c.times_shown) * 100)
+          : 0;
+        const badge = c.times_shown === 0 ? '🆕' : accuracy >= 80 ? '✅' : accuracy >= 50 ? '🟡' : '🔴';
+        lines.push(`${badge} *#${c.id}* ${c.question}`);
+      }
+      if (cards.length > 10) {
+        lines.push(`\n_(+${cards.length - 10} más)_`);
+      }
+
+      await humanDelay();
+      await sendText(jid, lines.join('\n'));
+    } catch (err) {
+      console.error('Error listando flashcards:', err.message);
+      await sendText(jid, '❌ No pude leer tus flashcards.');
+    }
+    return;
+  }
+
+  if (lower === '!quiz' || lower === '!examen' || lower.startsWith('!quiz ')) {
+    if (hasActiveQuiz(jid)) {
+      await sendText(jid, '⏳ Ya tienes un quiz activo. Respóndelo o escribe `!quiz-stop` para cancelar.');
+      return;
+    }
+
+    try {
+      const parts = text.split(/\s+/);
+      let count = 5;
+      if (parts.length >= 2) {
+        const n = parseInt(parts[1], 10);
+        if (!isNaN(n) && n > 0 && n <= 20) count = n;
+      }
+
+      const cards = await getRandomFlashcards(jid, count);
+
+      if (cards.length === 0) {
+        await humanDelay();
+        await sendText(jid, '✨ No tienes flashcards todavía.\n\nCrea una con:\n`!flashcard pregunta | respuesta`');
+        return;
+      }
+
+      startQuiz(jid, cards);
+      const q = nextQuestion(jid);
+
+      await humanDelay();
+      await sendText(
+        jid,
+        `📚 *Quiz iniciado — ${cards.length} preguntas*\n\n` +
+        `📝 *Pregunta ${q.index}/${q.total}:*\n${q.flashcard.question}\n\n` +
+        `_Responde cuando quieras. Escribe "pista" si necesitas ayuda o "saltar" para pasar._`
+      );
+    } catch (err) {
+      console.error('Error iniciando quiz:', err.message);
+      await sendText(jid, '❌ No pude iniciar el quiz.');
+    }
+    return;
+  }
+
+  if (lower === '!quiz-stop' || lower === '!cancelar-quiz') {
+    if (!hasActiveQuiz(jid)) {
+      await sendText(jid, '✨ No hay quiz activo.');
+      return;
+    }
+    endQuiz(jid);
+    await humanDelay();
+    await sendText(jid, '🛑 Quiz cancelado.');
+    return;
+  }
+
+  if (lower.startsWith('!borrar-flashcard ') || lower.startsWith('!del-fc ')) {
+    const start = lower.startsWith('!borrar-flashcard ') ? 18 : 8;
+    const idStr = text.slice(start).trim();
+    const id = parseInt(idStr, 10);
+
+    if (isNaN(id)) {
+      await sendText(jid, '❌ Uso: `!borrar-flashcard <id>`');
+      return;
+    }
+
+    const ok = await deleteFlashcard(id);
+    await humanDelay();
+    if (ok) {
+      await sendText(jid, `🗑️ Flashcard #${id} eliminada.`);
+    } else {
+      await sendText(jid, `❌ No encontré la flashcard #${id}.`);
+    }
+    return;
+  }
+
   // ==================== SISTEMA ====================
   if (lower === '!ping') { await handlePing(jid); return; }
 
@@ -442,12 +607,15 @@ async function handleMessage(sock, msg) {
     const s = await getStats(jid);
     const study = await getStudyStats(jid, 30);
     const tasks = await getPendingTasks(jid);
+    const fcStats = await getFlashcardStats(jid);
+
     await sendText(jid, `📊 *Estadísticas*
 
 💬 Mensajes: ${s.messages}
 🧠 Hechos: ${s.facts}
 📝 Tareas pendientes: ${tasks.length}
-📚 Estudio (30d): ${study.studied}/${study.total}`);
+📚 Estudio (30d): ${study.studied}/${study.total}
+🎴 Flashcards: ${fcStats.total} (✅ ${fcStats.mastered})`);
     return;
   }
 
@@ -582,10 +750,109 @@ async function handleMessage(sock, msg) {
 
   if (lower === '!test-week') {
     await humanDelay();
-    await sendText(jid, '⏳ Simulando vista previa semanal...');
+    await sendText(jid, '⏳ Simulando resumen semanal...');
     const { reminderWeeklyPreview } = await import('./cron/reminders.js');
     await reminderWeeklyPreview();
     return;
+  }
+
+  if (lower === '!resumen-semana' || lower === '!reporte') {
+    await humanDelay();
+    await sendText(jid, '⏳ Generando resumen semanal...');
+    const { reminderWeeklyPreview } = await import('./cron/reminders.js');
+    await reminderWeeklyPreview();
+    return;
+  }
+
+  // ==================== MANEJO DE RESPUESTAS DE QUIZ ====================
+  // Va ANTES del LLM y DESPUÉS de todos los comandos.
+  // Solo actúa si hay un quiz activo Y el mensaje no empieza con "!"
+  if (hasActiveQuiz(jid) && !lower.startsWith('!')) {
+    const q = nextQuestion(jid);
+
+    if (!q) {
+      // Sin más preguntas, cerrar el quiz
+      endQuiz(jid);
+      // Fall through → va al LLM
+    } else {
+      // Comando especial: pista
+      if (lower === 'pista' || lower === 'hint' || lower === '?') {
+        const expected = q.flashcard.answer;
+        const firstWords = expected.split(/\s+/).slice(0, 3).join(' ');
+        await humanDelay();
+        await sendText(jid, `💡 Pista: _${firstWords}..._`);
+        return;
+      }
+
+      // Comando especial: saltar
+      if (lower === 'saltar' || lower === 'skip' || lower === 'no sé' || lower === 'no se') {
+        recordAnswer(jid, false);
+        await updateFlashcardStats(q.flashcard.id, false);
+
+        const nextQ = nextQuestion(jid);
+        if (!nextQ) {
+          const summary = getQuizSummary(jid);
+          endQuiz(jid);
+          await humanDelay();
+          await sendText(
+            jid,
+            `📊 *Quiz completado*\n\n` +
+            `✅ Correctas: ${summary.correct}/${summary.total}\n` +
+            `📈 Precisión: ${summary.percentage}%\n\n` +
+            (summary.percentage >= 80 ? '🔥 ¡Excelente, mi amor! 💪' :
+             summary.percentage >= 50 ? '👍 Buen intento. Sigue practicando.' :
+             '📚 Necesitas repasar más. ¡Vamos!')
+          );
+        } else {
+          await humanDelay();
+          await sendText(
+            jid,
+            `❌ La respuesta era:\n*${q.flashcard.answer}*\n\n` +
+            `📝 *Pregunta ${nextQ.index}/${nextQ.total}:*\n${nextQ.flashcard.question}`
+          );
+        }
+        return;
+      }
+
+      // Respuesta normal
+      const result = checkAnswer(text, q.flashcard.answer);
+      recordAnswer(jid, result.correct);
+      await updateFlashcardStats(q.flashcard.id, result.correct);
+
+      const nextQ = nextQuestion(jid);
+      if (!nextQ) {
+        const summary = getQuizSummary(jid);
+        endQuiz(jid);
+        await humanDelay();
+        const emoji = result.correct ? '✅' : '❌';
+        const feedback = result.correct
+          ? '¡Correcto!'
+          : `La respuesta era:\n*${q.flashcard.answer}*`;
+
+        await sendText(
+          jid,
+          `${emoji} ${feedback}\n\n` +
+          `📊 *Quiz completado*\n` +
+          `✅ Correctas: ${summary.correct}/${summary.total}\n` +
+          `📈 Precisión: ${summary.percentage}%\n\n` +
+          (summary.percentage >= 80 ? '🔥 ¡Excelente, mi amor! 💪' :
+           summary.percentage >= 50 ? '👍 Buen intento. Sigue practicando.' :
+           '📚 Necesitas repasar más. ¡Vamos!')
+        );
+      } else {
+        await humanDelay();
+        const feedback = result.correct
+          ? '✅ ¡Correcto!'
+          : `❌ La respuesta era:\n*${q.flashcard.answer}*`;
+
+        await sendText(
+          jid,
+          `${feedback}\n\n` +
+          `📝 *Pregunta ${nextQ.index}/${nextQ.total}:*\n${nextQ.flashcard.question}`
+        );
+      }
+      return;
+    }
   }
 
   // ==================== LLM NORMAL ====================

@@ -15,6 +15,8 @@ import {
   createStudyConfirmation,
   getPendingTasks,
   getRecentMessages,
+  getFlashcards,
+  getStudyStats,
 } from '../memory/store.js';
 import {
   getWeather,
@@ -260,24 +262,91 @@ async function eveningReview() {
 }
 
 /* ============================================================
- *  Domingo 19:00 — Vista previa de la semana
+ *  Domingo 20:00 — Resumen semanal (MEJORADO)
  * ============================================================ */
 async function reminderWeeklyPreview() {
-  console.log('\n📅 [CRON] Vista previa semanal (domingo 19:00)');
+  console.log('\n📊 [CRON] Resumen semanal (domingo 20:00)');
+
+  const today = new Date();
+  const lastWeek = new Date(today);
+  lastWeek.setDate(lastWeek.getDate() - 7);
 
   const { week, range, courses } = getNextWeekTopics();
 
-  const lines = [
-    `📅 *Semana ${week} empieza mañana*`,
-    `_${range}_\n`,
-  ];
+  // ---- Estadísticas de la semana ----
+  const lines = [`📊 *Resumen de la semana*\n`];
 
-  for (const c of courses) {
+  // 1. Estudio
+  try {
+    const study = await getStudyStats(config.owners[0], 7);
+    lines.push(`📚 *Estudio*`);
+    if (study.total === 0) {
+      lines.push(`• Sin confirmaciones esta semana`);
+    } else {
+      const pct = Math.round((study.studied / study.total) * 100);
+      lines.push(`✅ Confirmaste estudio: *${study.studied}/${study.total}* días (${pct}%)`);
+      if (pct >= 70) lines.push(`🔥 ¡Gran semana, sigue así!`);
+      else if (pct >= 40) lines.push(`👍 Buen ritmo, puedes más.`);
+      else lines.push(`💪 Vamos a subir ese ritmo esta semana.`);
+    }
+    lines.push('');
+  } catch (err) {
+    console.error('Error stats estudio:', err.message);
+  }
+
+  // 2. Tareas
+  try {
+    const tasks = await getPendingTasks(config.owners[0]);
+    if (tasks.length === 0) {
+      lines.push(`📝 *Tareas: ✅ Todo al día*`);
+    } else {
+      lines.push(`📝 *Tareas pendientes: ${tasks.length}*`);
+      for (const t of tasks.slice(0, 5)) {
+        const due = t.due_date ? ` — 📅 ${t.due_date}` : '';
+        lines.push(`• ${t.title}${due}`);
+      }
+      if (tasks.length > 5) lines.push(`_(+${tasks.length - 5} más)_`);
+    }
+    lines.push('');
+  } catch (err) {
+    console.error('Error stats tareas:', err.message);
+  }
+
+  // 3. Flashcards
+  try {
+    const cards = await getFlashcards(config.owners[0]);
+    if (cards.length > 0) {
+      const total = cards.length;
+      const mastered = cards.filter(
+        (c) => c.times_shown >= 3 && c.times_right / c.times_shown >= 0.8
+      ).length;
+      const toReview = total - mastered;
+
+      lines.push(`🎴 *Flashcards*`);
+      lines.push(`• Total: ${total}`);
+      lines.push(`• ✅ Dominadas: ${mastered}`);
+      lines.push(`• 📖 Por repasar: ${toReview}`);
+      lines.push(`_Practica con !quiz_`);
+      lines.push('');
+    }
+  } catch (err) {
+    console.error('Error stats flashcards:', err.message);
+  }
+
+  // 4. Próxima semana
+  lines.push(`📅 *Semana ${week} empieza mañana*`);
+  lines.push(`_${range}_\n`);
+
+  for (const c of courses.slice(0, 4)) {
     lines.push(`📚 *${c.courseName}*`);
     lines.push(`📖 ${c.topic}\n`);
   }
 
-  lines.push('💡 Buen momento para adelantar estudio este domingo, mi amor. ¡Vamos con todo!');
+  if (courses.length > 4) {
+    lines.push(`_(+${courses.length - 4} cursos más)_\n`);
+  }
+
+  lines.push('💪 ¡Buena semana, mi amor!');
 
   await broadcast(lines.join('\n'));
 }
@@ -318,15 +387,15 @@ export function startCronJobs() {
   // 20:30 diario → repaso nocturno
   cron.schedule('30 20 * * *', eveningReview, { timezone: 'America/Lima' });
 
-  // Domingo 19:00 → vista previa semanal
-  cron.schedule('0 19 * * 0', reminderWeeklyPreview, { timezone: 'America/Lima' });
+  // Domingo 20:00 → resumen semanal
+  cron.schedule('0 20 * * 0', reminderWeeklyPreview, { timezone: 'America/Lima' });
 
   console.log('⏰ Cron jobs activos:');
   console.log('   • 07:00 diario → clima mañana + clases del día');
   console.log('   • 12:00 diario → clima mediodía + tarde');
   console.log('   • 19:00 diario → clima noche + mañana + clases mañana');
   console.log('   • 20:30 diario → repaso nocturno');
-  console.log('   • Domingo 19:00 → vista previa semanal');
+  console.log('   • Domingo 20:00 → resumen semanal');
 
   startSelfPing();
 }

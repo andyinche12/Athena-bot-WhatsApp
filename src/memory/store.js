@@ -263,3 +263,91 @@ export async function getStats(chatId) {
     pendingTasks: tasksRes.count || 0,
   };
 }
+
+/* ============================================================
+ *  FLASHCARDS
+ * ============================================================ */
+
+export async function createFlashcard(chatId, question, answer, course = null) {
+  const { data, error } = await supabase
+    .from('athena_flashcards')
+    .insert({
+      chat_id: chatId,
+      question,
+      answer,
+      course,
+      created_at: Date.now(),
+    })
+    .select('id')
+    .single();
+
+  if (error) {
+    console.error('createFlashcard error:', error.message);
+    return null;
+  }
+  return data?.id;
+}
+
+export async function getFlashcards(chatId) {
+  const { data, error } = await supabase
+    .from('athena_flashcards')
+    .select('id, question, answer, course, times_shown, times_right, created_at')
+    .eq('chat_id', chatId)
+    .order('created_at', { ascending: false });
+
+  if (error) return [];
+  return data || [];
+}
+
+export async function getRandomFlashcards(chatId, count = 5) {
+  // Traer todas y elegir aleatoriamente en cliente
+  // (Supabase no tiene ORDER BY RANDOM() nativo por API, pero con
+  //  <1000 flashcards el costo es mínimo)
+  const all = await getFlashcards(chatId);
+  if (all.length === 0) return [];
+
+  // Mezclar
+  const shuffled = [...all].sort(() => Math.random() - 0.5);
+  return shuffled.slice(0, Math.min(count, all.length));
+}
+
+export async function updateFlashcardStats(id, wasCorrect) {
+  // Incrementar contadores
+  const { data: current, error: err1 } = await supabase
+    .from('athena_flashcards')
+    .select('times_shown, times_right')
+    .eq('id', id)
+    .single();
+
+  if (err1 || !current) return false;
+
+  const { error } = await supabase
+    .from('athena_flashcards')
+    .update({
+      times_shown: (current.times_shown || 0) + 1,
+      times_right: (current.times_right || 0) + (wasCorrect ? 1 : 0),
+      last_shown: Date.now(),
+    })
+    .eq('id', id);
+
+  return !error;
+}
+
+export async function deleteFlashcard(id) {
+  const { error } = await supabase
+    .from('athena_flashcards')
+    .delete()
+    .eq('id', id);
+
+  return !error;
+}
+
+export async function getFlashcardStats(chatId) {
+  const all = await getFlashcards(chatId);
+  const total = all.length;
+  const mastered = all.filter(
+    (c) => c.times_shown >= 3 && c.times_right / c.times_shown >= 0.8
+  ).length;
+
+  return { total, mastered, toReview: total - mastered };
+}
