@@ -3,28 +3,25 @@
  * API gratuita, sin key, sin límites prácticos.
  * Docs: https://open-meteo.com/en/docs
  *
- * v4 — Mejoras:
- *   • Caché de 10 min (evita llamar a la API en cada comando)
- *   • Sensación térmica (aparent_temperature)
- *   • Viento con dirección (velocidad + rumbo)
- *   • Humedad relativa
- *   • Índice UV (con alertas si es muy alto)
- *   • Amanecer y atardecer
- *   • Emoji contextual por franja horaria
- *   • Formato compacto y útil por franja
- *   • Alertas inteligentes (lluvia fuerte, viento, UV, etc.)
+ * v5 — Fixes anti-cold-start de Render:
+ *   • Timeout 8s → 15s (aguanta cold start de Render free)
+ *   • Reintentos 2 → 3 (más margen ante red inestable)
+ *   • Fallback a cache vieja si la API falla (el bot nunca se queda sin clima)
+ *   • Timeout ahora cubre también el .json() (no solo las cabeceras)
  */
 
 const LAT = -11.15;
 const LON = -75.99;
 const TZ = 'America/Lima';
 
-// Timeout para fetch (8 segundos)
-const FETCH_TIMEOUT_MS = 8000;
+// Timeout para fetch + parseo (15 segundos → aguanta cold start de Render)
+const FETCH_TIMEOUT_MS = 15000;
 // Reintentos máximos
-const MAX_RETRIES = 2;
+const MAX_RETRIES = 3;
 // Caché: tiempo de vida en ms (10 minutos)
 const CACHE_TTL_MS = 10 * 60 * 1000;
+// Caché "vieja" de emergencia: si la API falla, usamos datos de hasta 2 horas atrás
+const STALE_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
 
 /* ============================================================
  *  Caché en memoria
@@ -34,6 +31,10 @@ let _cacheTime = 0;
 
 function isCacheValid() {
   return _cache && Date.now() - _cacheTime < CACHE_TTL_MS;
+}
+
+function isStaleCacheUsable() {
+  return _cache && Date.now() - _cacheTime < STALE_CACHE_TTL_MS;
 }
 
 /* ============================================================
@@ -75,15 +76,12 @@ function emojiForHour(code, hour) {
   const base = codeInfo(code).emoji;
 
   if (code === 0 || code === 1) {
-    // Noche: 19:00 a 05:59
     if (hour >= 19 || hour < 6) {
       return code === 0 ? '🌙' : '☁️';
     }
-    // Mediodía / tarde: 12:00 a 17:59
     if (hour >= 12 && hour < 18) {
       return code === 0 ? '☀️' : '🌤️';
     }
-    // Mañana temprano / atardecer
     return code === 0 ? '☀️' : '🌤️';
   }
 
@@ -119,21 +117,24 @@ function formatHour(isoStr) {
 }
 
 /* ============================================================
- *  Fetch con timeout
+ *  Fetch con timeout (ahora cubre TODO: headers + body + json parse)
  * ============================================================ */
-async function fetchWithTimeout(url, timeoutMs) {
+async function fetchWeatherJSON(url, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, { signal: controller.signal });
-    return res;
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    // .json() TAMBIÉN está protegido por el mismo timeout
+    const data = await res.json();
+    return data;
   } finally {
     clearTimeout(timer);
   }
 }
 
 /* ============================================================
- *  getWeather() — con caché, retry y parámetros ampliados
+ *  getWeather() — con caché, retry y fallback a cache vieja
  * ============================================================ */
 export async function getWeather() {
   // Caché válida → devolver sin llamar a la API
@@ -156,12 +157,8 @@ export async function getWeather() {
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     const t0 = Date.now();
     try {
-      const res = await fetchWithTimeout(url, FETCH_TIMEOUT_MS);
+      const data = await fetchWeatherJSON(url, FETCH_TIMEOUT_MS);
       const elapsed = Date.now() - t0;
-
-      if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-
-      const data = await res.json();
 
       if (!data.daily || !data.hourly || !data.daily.weather_code) {
         throw new Error('Respuesta inválida de Open-Meteo (faltan campos)');
@@ -182,18 +179,28 @@ export async function getWeather() {
       console.error(
         `   ⚠️  Intento ${attempt}/${MAX_RETRIES} falló (${elapsed}ms): ${reason}`
       );
-      if (attempt === MAX_RETRIES) {
-        console.error('   ❌ Open-Meteo falló todos los intentos');
-        return null;
+      if (attempt < MAX_RETRIES) {
+        await new Promise((r) => setTimeout(r, attempt * 800));
       }
-      await new Promise((r) => setTimeout(r, attempt * 500));
     }
   }
+
+  // ❌ Todos los intentos fallaron
+  console.error('   ❌ Open-Meteo falló todos los intentos');
+
+  // Fallback: usar cache vieja si existe (hasta 2 horas de antigüedad)
+  if (isStaleCacheUsable()) {
+    const ageMin = Math.round((Date.now() - _cacheTime) / 60000);
+    console.warn(`   ⚠️  Usando cache VIEJA (${ageMin} min de antigüedad)`);
+    return _cache;
+  }
+
+  console.error('   ❌ No hay cache de respaldo');
   return null;
 }
 
 /* ============================================================
- *  Construcción de un día (con todos los datos nuevos)
+ *  Construcción de un día
  * ============================================================ */
 function buildDayInfo(data, dayOffset) {
   const { daily, hourly } = data;
@@ -367,7 +374,6 @@ export function formatWeatherTomorrow(weather) {
 
 /**
  * Formato completo (usado por !clima).
- * Combina morning + midday + evening en un solo mensaje limpio.
  */
 export function formatWeatherFull(weather) {
   if (!weather) return null;

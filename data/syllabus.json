@@ -23,22 +23,23 @@
     "contabilidad-financieras": {
       "name": "Contabilidad de Entidades Financieras",
       "topics": {
-        "1": { "topic": "Sistema Financiero: definición, organización, estructura, evolución, importancia y fines" },
-        "2": { "topic": "Órganos de Regulación y control del sistema financiero nacional, base legal y funciones" },
+        "1": { "topic": "Sistema Financiero: definición, organización, estructura e importancia del Sistema Financiero Nacional" },
+        "2": { "topic": "Órganos de regulación y control del sistema financiero (SBS, BCRP), base legal y funciones" },
         "3": { "topic": "Ley N° 26702 - Ley General del Sistema Financiero Nacional, Sistema de Seguros y Sistema Privado de Pensiones" },
         "4": { "topic": "Encaje bancario: concepto, importancia, características" },
-        "5": { "topic": "Plan contable financiero: estructura, identificación de cuentas, nomenclatura, codificación" },
+        "5": { "topic": "Plan Contable Financiero: estructura general, identificación de cuentas, nomenclatura y codificación" },
         "6": { "topic": "Clase 01 Activo: descripción, dinámica, débitos, créditos, préstamos, operaciones activas" },
         "7": { "topic": "Clase 02 Pasivo: descripción, dinámica, depósitos, operaciones pasivas" },
-        "8": { "topic": "Clase 03 Patrimonio: descripción, dinámica, capital" },
-        "9": { "topic": "Clase 04 Gastos: descripción, dinámica, intereses cobrados y pagados" },
-        "10": { "topic": "Clase 05 Ingresos: descripción, dinámica, intereses cobrados y pagados" },
+        "8": { "topic": "Clase 03 Patrimonio: descripción, dinámica, capital y reservas" },
+        "9": { "topic": "Clase 04 Gastos: descripción, dinámica, intereses y comisiones pagadas" },
+        "10": { "topic": "Clase 05 Ingresos: descripción, dinámica, intereses y comisiones cobradas" },
         "11": { "topic": "Clase 06 Cuentas de Resultados: resultado del ejercicio" },
         "12": { "topic": "Clase 07 Cuentas de Contingencias" },
-        "13": { "topic": "Clase 08 Cuentas de orden" },
+        "13": { "topic": "Clase 08 Cuentas de Orden" },
         "14": { "topic": "Libros contables: inventario y balances, asiento de apertura, mayorización" },
         "15": { "topic": "Balance de comprobación: estructura, procedimientos, resultados" },
-        "16": { "topic": "Estados financieros: concepto, características, importancia y finalidad" }
+        "16": { "topic": "Estados financieros: concepto, características, importancia y finalidad" },
+        "17": { "topic": "Evaluación Final y Nivelación de Clases / Recuperación Académica" }
       }
     },
     "comprension-ingles": {
@@ -53,13 +54,14 @@
         "7": { "topic": "Existential and impersonal: there is / there are, it, auxiliary verbs" },
         "8": { "topic": "Future: future perfect, regular and irregular verbs" },
         "9": { "topic": "What are you doing tomorrow? I'm going to, I will" },
-        "10": { "topic": "Repaso y práctica de estructuras verbales" },
-        "11": { "topic": "Lectura comprensiva de textos técnicos contables" },
-        "12": { "topic": "Redacción de párrafos técnicos en inglés" },
-        "13": { "topic": "Conectores: first, then, next, finally" },
-        "14": { "topic": "Traducción de textos contables al inglés" },
-        "15": { "topic": "Redacción de documentos técnicos" },
-        "16": { "topic": "Evaluación final y presentaciones" }
+        "10": { "topic": "Adjectives and Adverbs: comparativos, superlativos y uso técnico" },
+        "11": { "topic": "Pronouns and Possessives: personales, posesivos y preposiciones de tiempo/lugar" },
+        "12": { "topic": "Technical Vocabulary: vocabulario técnico en textos financieros e impresos del entorno laboral" },
+        "13": { "topic": "Reported Speech: Direct speech vs. Reported speech en finanzas" },
+        "14": { "topic": "Redacción técnica I: Traducir y redactar un Curriculum Vitae (CV)" },
+        "15": { "topic": "Redacción técnica II: Estructura y traducción de un Memorandum" },
+        "16": { "topic": "Redacción técnica III: Estructura y traducción de un Financial Report" },
+        "17": { "topic": "Evaluación Final y Nivelación de Clases / Recuperación Académica" }
       }
     },
     "solucion-problemas": {
@@ -71,16 +73,17 @@
         "4": { "topic": "Causas que originan el problema: tipología de causas (estructurales, procedimentales, humanas, sistemas)" },
         "5": { "topic": "Procesos de análisis del problema: etapas y delimitación del alcance operativo" },
         "6": { "topic": "Ciclo PHVA aplicado a procesos contables. Identificación de cuellos de botella" },
-        "7": { "topic": "Mecanismos alternativos de resolución de conflictos: negociación, mediación y conciliación" },
+        "7": { "topic": "Mecanismos alternativos de resolución de conflictos: negociación, mediación y conciliación extrajudicial" },
         "8": { "topic": "Marco normativo: Código Tributario, Ley del Impuesto a la Renta, D.S. 003-97-TR (LPCL), RIT" },
-        "9": { "topic": "Fases de la metodología: identificación, focalización, generación de alternativas, evaluación" },
+        "9": { "topic": "Herramientas cualitativas: Flujogramas de atención de contingencias tributarias y de auditoría" },
         "10": { "topic": "Lluvia de ideas estructurada, Diagrama de Ishikawa (Causa-Efecto), Diagrama de Pareto (80/20)" },
         "11": { "topic": "Listas de chequeo (checklists) para cierre contable. Diagrama de Gantt" },
         "12": { "topic": "Organización de la información: mapas conceptuales, cuadros de mando, Kanban" },
-        "13": { "topic": "Comunicación asertiva: comunicación interpersonal directiva, manejo de objeciones" },
+        "13": { "topic": "Comunicación asertiva: comunicación interpersonal directiva, manejo de objeciones financieras" },
         "14": { "topic": "Diseño de estrategias: SCAMPER, Design Thinking aplicados a procesos contables" },
-        "15": { "topic": "Evaluación e interpretación de resultados: KPIs de gestión contable-financiera" },
-        "16": { "topic": "Implementación de mecanismos de mejora: Kaizen y Lean Office en contabilidad" }
+        "15": { "topic": "Evaluación e interpretación de resultados: KPIs de gestión contable-financiera y análisis costo-beneficio" },
+        "16": { "topic": "Implementación de mecanismos de mejora: Kaizen y Lean Office en contabilidad" },
+        "17": { "topic": "Evaluación Final y Nivelación de Clases / Recuperación Académica" }
       }
     },
     "analisis-eeff": {
@@ -97,11 +100,12 @@
         "9": { "topic": "Métodos de Análisis Financiero: series de tendencia e indicadores integrados" },
         "10": { "topic": "Horizontal y Vertical del Estado de Situación Financiera: integración completa" },
         "11": { "topic": "Horizontal y Vertical del Estado de Resultados: integración completa" },
-        "12": { "topic": "Explicación Económica y Financiera: interpretación de resultados, razones financieras" },
-        "13": { "topic": "Informe de la Evaluación Financiera: priorización de hallazgos relevantes" },
-        "14": { "topic": "Informe de la Evaluación Económica: integración de informe económico y financiero" },
-        "15": { "topic": "Elaboración del documento único final según modelo institucional" },
-        "16": { "topic": "Presentación y sustentación del informe final" }
+        "12": { "topic": "Explicación de la situación económica y financiera basada en ratios" },
+        "13": { "topic": "Razones Financieras e informe de diagnóstico integral" },
+        "14": { "topic": "Interpretación combinada y priorización de hallazgos económicos" },
+        "15": { "topic": "Redacción e informe formal de la Evaluación Financiera" },
+        "16": { "topic": "Consolidación del Informe Final Unificado de Evaluación Económica y Financiera" },
+        "17": { "topic": "Evaluación Final y Nivelación de Clases / Recuperación Académica" }
       }
     },
     "auditoria": {
@@ -115,14 +119,15 @@
         "6": { "topic": "Técnicas de obtención de evidencia analítica: definición, alcance, evaluación operativa" },
         "7": { "topic": "Pruebas de cumplimiento: definición, propósito y ejemplos (NIA 330)" },
         "8": { "topic": "Pruebas sustantivas y procedimientos analíticos (NIA 520)" },
-        "9": { "topic": "Procedimientos en la Fase Preliminar de la auditoría" },
-        "10": { "topic": "Procedimientos en la Fase de Planeamiento de la auditoría" },
-        "11": { "topic": "Procedimientos en la Fase de Ejecución de la auditoría" },
-        "12": { "topic": "Procedimientos en la Fase Final de la auditoría" },
-        "13": { "topic": "Papeles de trabajo: elaboración y archivo" },
-        "14": { "topic": "Informe de auditoría: estructura y tipos de opinión" },
-        "15": { "topic": "Casos prácticos integrales de auditoría" },
-        "16": { "topic": "Presentación y sustentación de informe final de auditoría" }
+        "9": { "topic": "Procedimientos en la Fase Preliminar de la auditoría (NIA 220)" },
+        "10": { "topic": "Procedimientos en la Fase de Planeamiento I: Matriz de riesgos y memorando de planificación (NIA 300)" },
+        "11": { "topic": "Planeamiento II: Programa de auditoría y evaluación de riesgos" },
+        "12": { "topic": "Fase de Ejecución: evidencias de auditoría y papeles de trabajo (NIA 230 / NIA 330)" },
+        "13": { "topic": "Recopilación, indagación, análisis y comunicación de hallazgos de auditoría" },
+        "14": { "topic": "Procedimientos en la Fase Final de la auditoría (NIA 560)" },
+        "15": { "topic": "Estructura, componentes y elaboración del Informe de Auditoría (NIA 700)" },
+        "16": { "topic": "Tipos de opinión y formulación del Dictamen del Auditor (NIA 700)" },
+        "17": { "topic": "Evaluación Final y Nivelación de Clases / Recuperación Académica" }
       }
     },
     "finanzas-privadas": {
@@ -140,10 +145,11 @@
         "10": { "topic": "Anualidades: vencida, anticipada, diferida. Aplicación en operaciones financieras" },
         "11": { "topic": "Renta periódica: elementos, relación entre tasa, plazo y renta" },
         "12": { "topic": "Ciclo de conversión del efectivo: ciclo operativo, período promedio de inventarios, cobranza, pago" },
-        "13": { "topic": "Decisiones de financiamiento: fuentes internas y externas" },
-        "14": { "topic": "Apalancamiento: operativo, financiero, total" },
-        "15": { "topic": "Evaluación de proyectos de inversión" },
-        "16": { "topic": "Presentación de caso práctico final" }
+        "13": { "topic": "Financiamiento de inversiones: fuentes internas, externas y evaluación de costos" },
+        "14": { "topic": "Financiamiento del capital de trabajo y necesidades operativas de fondos (NOF)" },
+        "15": { "topic": "Apalancamiento Operativo: costos fijos, variables y grado de apalancamiento (GAO)" },
+        "16": { "topic": "Apalancamiento Financiero (GAF) y Apalancamiento Total (GAT); análisis de riesgo" },
+        "17": { "topic": "Evaluación Final y Nivelación de Clases / Recuperación Académica" }
       }
     }
   }
