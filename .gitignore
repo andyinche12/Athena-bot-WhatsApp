@@ -4,15 +4,14 @@ node_modules/
 # Variables de entorno
 .env
 .env.local
+.env.render
 
-# Sesión de WhatsApp (¡CRÍTICO! Nunca subir esto)
+# 🔐 Sesión legacy de Baileys (ya no se usa, todo vive en Supabase)
 data/session/
 
-# Base de datos SQLite (archivos temporales)
-data/*.db
-data/*.db-shm
-data/*.db-wal
-data/*.db-journal
+# 🗑️ Temporales del bot (TTS/STT y documentos)
+data/tmp/
+data/*.bak
 
 # Sistema
 .DS_Store
@@ -23,12 +22,10 @@ Thumbs.db
 .idea/
 
 # Logs
-logs/*.log
+logs/
+*.log
 
-# Temporales
+# Build / dist
 dist/
 build/
 *.tmp
-
-# Render
-.env.render
