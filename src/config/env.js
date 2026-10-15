@@ -1,8 +1,10 @@
 import 'dotenv/config';
 
 const required = [
-  'GEMINI_API_KEY',
-  'OPENROUTER_API_KEY',
+  'GROQ_API_KEY',        // LLM 1º + Whisper
+  'NVIDIA_API_KEY',      // LLM 2º
+  'GEMINI_API_KEY',      // LLM 3º + Visión
+  'OPENROUTER_API_KEY',  // LLM 4º
   'SUPABASE_URL',
   'SUPABASE_ANON_KEY',
 ];
@@ -56,10 +58,9 @@ export const config = {
   replyDelayMax: parseInt(process.env.REPLY_DELAY_MAX || '12', 10),
 
   // Memoria
-  memoryDbPath: process.env.MEMORY_DB_PATH || './data/athena.db',
   memoryMaxShortTerm: parseInt(process.env.MEMORY_MAX_SHORT_TERM || '20', 10),
 
-  // 🆕 Supabase (persistencia de sesión)
+  // Supabase
   supabaseUrl: process.env.SUPABASE_URL || '',
   supabaseAnonKey: process.env.SUPABASE_ANON_KEY || '',
 };

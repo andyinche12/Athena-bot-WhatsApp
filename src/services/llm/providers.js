@@ -2,7 +2,9 @@ import OpenAI from 'openai';
 import { GoogleGenAI } from '@google/genai';
 import { config } from '../../config/env.js';
 
-// ---------- Clientes OpenAI-compatibles ----------
+// ============================================================
+//  Clientes OpenAI-compatibles
+// ============================================================
 
 const groqClient = config.groqApiKey
   ? new OpenAI({
@@ -23,7 +25,7 @@ const openrouterClient = config.openrouterApiKey
       apiKey: config.openrouterApiKey,
       baseURL: 'https://openrouter.ai/api/v1',
       defaultHeaders: {
-        'HTTP-Referer': 'https://github.com/athena-bot',
+        'HTTP-Referer': 'https://github.com/andyinche12/Athena-bot-WhatsApp',
         'X-Title': 'Athena Bot WhatsApp',
       },
     })
@@ -33,66 +35,93 @@ const geminiClient = config.geminiApiKey
   ? new GoogleGenAI({ apiKey: config.geminiApiKey })
   : null;
 
-// ---------- Modelos por defecto ----------
+// ============================================================
+//  Modelos por defecto
+//  (Verificados en openrouter.ai/api/v1/models y NVIDIA NIM)
+// ============================================================
 
 const MODELS = {
-  groq: 'openai/gpt-oss-120b', 
+  groq: 'openai/gpt-oss-120b',
   nvidia: 'nvidia/nemotron-3-ultra-550b-a55b',
-  openrouter: 'openrouter/free',
+  openrouter: 'nvidia/nemotron-3-super-120b-a12b:free',
   gemini: 'gemini-3.5-flash-lite',
 };
 
-// ---------- Funciones de chat por proveedor ----------
+// ============================================================
+//  Helpers
+// ============================================================
 
-export async function chatGroq(messages, model = MODELS.groq) {
+/**
+ * Extrae el texto de una respuesta OpenAI-style.
+ */
+function extractText(choice) {
+  return choice?.message?.content?.trim() || '';
+}
+
+/**
+ * Devuelve el bloque response_format cuando el caller pide JSON.
+ * Aplica a Groq, NVIDIA y OpenRouter (OpenAI-compatibles).
+ */
+function jsonFormat(opts) {
+  return opts?.jsonMode ? { response_format: { type: 'json_object' } } : {};
+}
+
+// ============================================================
+//  Funciones de chat por proveedor
+// ============================================================
+
+export async function chatGroq(messages, model = MODELS.groq, opts = {}) {
   if (!groqClient) throw new Error('GROQ_API_KEY no configurada');
   const r = await groqClient.chat.completions.create({
     model,
     messages,
-    temperature: 0.7,
-    max_tokens: 1024,
+    temperature: opts.temperature ?? 0.7,
+    max_tokens: opts.maxTokens ?? 1024,
+    ...jsonFormat(opts),
   });
   return {
-    text: r.choices[0]?.message?.content?.trim() || '',
+    text: extractText(r.choices[0]),
     provider: 'groq',
     model,
     usage: r.usage,
   };
 }
 
-export async function chatNvidia(messages, model = MODELS.nvidia) {
+export async function chatNvidia(messages, model = MODELS.nvidia, opts = {}) {
   if (!nvidiaClient) throw new Error('NVIDIA_API_KEY no configurada');
   const r = await nvidiaClient.chat.completions.create({
     model,
     messages,
-    temperature: 0.7,
-    max_tokens: 1024,
+    temperature: opts.temperature ?? 0.7,
+    max_tokens: opts.maxTokens ?? 1024,
+    ...jsonFormat(opts),
   });
   return {
-    text: r.choices[0]?.message?.content?.trim() || '',
+    text: extractText(r.choices[0]),
     provider: 'nvidia',
     model,
     usage: r.usage,
   };
 }
 
-export async function chatOpenRouter(messages, model = MODELS.openrouter) {
+export async function chatOpenRouter(messages, model = MODELS.openrouter, opts = {}) {
   if (!openrouterClient) throw new Error('OPENROUTER_API_KEY no configurada');
   const r = await openrouterClient.chat.completions.create({
     model,
     messages,
-    temperature: 0.7,
-    max_tokens: 1024,
+    temperature: opts.temperature ?? 0.7,
+    max_tokens: opts.maxTokens ?? 1024,
+    ...jsonFormat(opts),
   });
   return {
-    text: r.choices[0]?.message?.content?.trim() || '',
+    text: extractText(r.choices[0]),
     provider: 'openrouter',
     model,
     usage: r.usage,
   };
 }
 
-export async function chatGemini(messages, model = MODELS.gemini) {
+export async function chatGemini(messages, model = MODELS.gemini, opts = {}) {
   if (!geminiClient) throw new Error('GEMINI_API_KEY no configurada');
 
   // Gemini usa "contents" con role: user | model
@@ -109,13 +138,20 @@ export async function chatGemini(messages, model = MODELS.gemini) {
     contents,
     config: {
       systemInstruction: system,
-      temperature: 0.7,
-      maxOutputTokens: 1024,
+      temperature: opts.temperature ?? 0.7,
+      maxOutputTokens: opts.maxTokens ?? 1024,
+      // Gemini usa responseMimeType en lugar de response_format
+      ...(opts.jsonMode ? { responseMimeType: 'application/json' } : {}),
     },
   });
 
   const text = r.text || r.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  return { text: text.trim(), provider: 'gemini', model, usage: r.usageMetadata };
+  return {
+    text: text.trim(),
+    provider: 'gemini',
+    model,
+    usage: r.usageMetadata,
+  };
 }
 
 export const MODELS_DEFAULT = MODELS;

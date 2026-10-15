@@ -1,6 +1,6 @@
 import { config, isOwner, humanDelay } from './config/env.js';
-import { SYSTEM_PROMPT } from './config/persona.js';
-import { startWhatsApp, sendText, sendAudio } from './services/whatsapp/client.js';
+import { buildSystemPrompt } from './config/persona.js';
+import { startWhatsApp, sendText, sendAudio, getSocket } from './services/whatsapp/client.js';
 import { askLLM, pingProvider, PROVIDERS_AVAILABLE } from './services/llm/router.js';
 import {
   saveMessage,
@@ -35,6 +35,7 @@ import { startCronJobs } from './cron/reminders.js';
 import { transcribeAudioMessage } from './services/audio/transcribe.js';
 import { textToSpeech } from './services/audio/tts.js';
 import { analyzeImageMessage } from './services/vision/analyze.js';
+import { generateMermaidDiagram } from './services/documents/mermaid-generator.js';
 import { parseTaskInput, formatDueDate } from './services/tasks/parser.js';
 import {
   parseExpense,
@@ -72,7 +73,29 @@ if (config.owners.length === 0 && config.ownerLids.length === 0) {
 }
 
 /* ============================================================
- *  AYUDA — organizada por categorías
+ *  HELPERS
+ * ============================================================ */
+
+function safeFilename(name, ext) {
+  let clean = (name || 'documento')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9\s]/g, '')
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+  if (clean.length > 50) {
+    clean = clean.slice(0, 50);
+    const lastUnderscore = clean.lastIndexOf('_');
+    if (lastUnderscore > 20) clean = clean.slice(0, lastUnderscore);
+  }
+
+  return `${clean}.${ext}`;
+}
+
+/* ============================================================
+ *  AYUDA
  * ============================================================ */
 
 const HELP_FULL = `🤖 *Athena Bot — Comandos*
@@ -117,10 +140,46 @@ _Categorías: comida, transporte, estudio, ocio, salud, hogar, otros_
 🌤️ *CLIMA*
 !clima (o !c) → Clima completo por franjas
 
+📊 *DIAGRAMAS CON TEXTO LEGIBLE (Mermaid)*
+Habla natural, sin comandos:
+• "crea un mapa conceptual de la razón de solvencia"
+• "hazme un mapa mental de las NIA"
+• "genera un diagrama de flujo del cierre contable"
+• "hazme un mapa conceptual de ESTE documento" (tras enviar un PDF)
+
+📄 *CREAR DOCUMENTOS CON IA*
+!crear word | tema → Informe .docx formal
+!crear pdf | tema → Documento PDF
+!crear excel | tema → Tabla con datos reales
+!crear ppt | tema → Presentación .pptx
+!mejorar <feedback> → Regenerar el último doc
+
+Ejemplos:
+!crear word | NIA 500 evidencia de auditoría
+!mejorar hazlo más corto y agrega ejemplos
+
+📄 *GENERAR MANUAL*
+!generar pdf | Título | Párrafo1 | Párrafo2
+!generar excel | Título | A1,B1\\nA2,B2
+
+🎨 *IMÁGENES ARTÍSTICAS (IA)*
+!dibujar <descripción> → Imagen con IA (Cloudflare FLUX)
+!draw <descripción> → Alias
+Ej: !dibujar un gato astronauta flotando en el espacio
+También: "crea una imagen de un gatito" (sin !)
+
+🖼️ *GRÁFICOS/TEXTO*
+!imagen Título | Contenido → Gráfico simple SVG
+!img Título | Contenido (alias)
+
+📎 *LEER DOCUMENTOS*
+Envía PDF, Word, Excel o PPT → lo analizo
+
 📊 *SISTEMA*
 !stats → Estadísticas + progreso
 !resumen-semana → Reporte semanal
 !ping → Estado de los 4 LLMs
+!modelos-nvidia → Ver modelos NVIDIA
 !reset → Borra historial
 !help → Esta ayuda
 !ayuda-rapida → Solo comandos básicos
@@ -130,7 +189,7 @@ Envía una nota de voz → la transcribo
 !voz <texto> → Forzar respuesta en audio
 !texto <texto> → Forzar respuesta en texto
 
-🖼️ *IMÁGENES*
+🖼️ *ANALIZAR IMÁGENES*
 Envía una foto (con o sin caption) → la analizo
 
 ✅ *ESTUDIO*
@@ -141,7 +200,8 @@ Envía una foto (con o sin caption) → la analizo
 !test-midday → Simula clima mediodía
 !test-reminder → Simula recordatorio 19:00
 !test-review → Simula repaso nocturno
-!test-week → Simula resumen semanal`;
+!test-week → Simula resumen semanal
+!test-sunday → Simula "Preparando el lunes"`;
 
 const HELP_SHORT = `🤖 *Comandos básicos* (escribe !help para ver todos)
 
@@ -162,14 +222,25 @@ const HELP_SHORT = `🤖 *Comandos básicos* (escribe !help para ver todos)
 !gasto 25 almuerzo → Registrar
 !gastos → Ver gastos de hoy
 
-⏱️ *Foco*
-!pomodoro → Iniciar 25 min
+📊 *Diagramas*
+"hazme un mapa conceptual de X" → Mermaid
+"crea un diagrama de flujo de X" → Mermaid
+
+📄 *Documentos*
+!crear word | NIA 500 → Word con IA
+!mejorar hazlo más corto → Regenerar
+!generar pdf | Título | Contenido
+
+🎨 *Imágenes*
+!dibujar un gato en el espacio → IA (Cloudflare)
+!imagen Título | Contenido → Gráfico simple
 
 !stats → Tus estadísticas
 !help → Ayuda completa
 
 🎤 Manda audio → lo transcribo
-🖼️ Manda foto → la analizo`;
+🖼️ Manda foto → la analizo
+📎 Manda PDF/Word/Excel → lo leo`;
 
 /* ============================================================
  *  Palabras clave que activan respuesta en voz
@@ -188,6 +259,79 @@ const VOICE_KEYWORDS = [
 ];
 
 /* ============================================================
+ *  Estado en memoria: último documento generado por usuario
+ *  (Permite el comando !mejorar)
+ * ============================================================ */
+const lastDocument = new Map(); // jid → { tipo, tema, filename }
+
+/* ============================================================
+ *  Último documento RECIBIDO (para dar contexto a Mermaid)
+ * ============================================================ */
+const lastReceivedDocument = new Map(); // jid → { text, filename, timestamp }
+
+/* ============================================================
+ *  Cola de mensajes por usuario
+ *  Garantiza que los mensajes se procesen en ORDEN secuencial
+ *  uno tras otro. Esto evita que "hazme un mapa de este documento"
+ *  llegue ANTES de que el documento termine de descargarse y
+ *  guardarse en lastReceivedDocument.
+ * ============================================================ */
+const userQueues = new Map(); // jid → Promise de la cola actual
+
+function enqueueForUser(jid, task) {
+  const prev = userQueues.get(jid) || Promise.resolve();
+  const next = prev.then(task).catch((err) => {
+    console.error(`❌ Error en cola de ${jid}:`, err.message);
+  });
+  userQueues.set(jid, next);
+  // Limpieza: cuando termina y es la última de la cadena, borrar la entrada
+  next.finally(() => {
+    if (userQueues.get(jid) === next) {
+      userQueues.delete(jid);
+    }
+  });
+  return next;
+}
+
+/* ============================================================
+ *  Detección de intención de diagrama (Mermaid)
+ *  Tiene PRIORIDAD sobre la detección de imágenes: si el usuario
+ *  pide un "mapa conceptual", queremos Mermaid, no una imagen IA.
+ * ============================================================ */
+function detectDiagramIntent(text) {
+  if (!text) return false;
+
+  const lower = text.toLowerCase();
+
+  const hasDiagramNoun = /\b(mapa\s+conceptual|mapa\s+mental|mapas\s+conceptuales|mapas\s+mentales|diagrama|diagramas|flujograma|flujogramas|organigrama|organigramas|flowchart|esquema|esquemas|cuadro\s+sin[óo]ptico|mind\s*map|concept\s*map)\b/i.test(lower);
+
+  const hasCreateVerb = /\b(crea|crear|creas|crees|haz|hazme|hacer|genera|generar|generas|realiza|realizar|elabora|elaborar|quiero|quisiera|necesito|me\s+gustar[íi]a|puedes|podr[íi]as|arma|ármame)\b/i.test(lower);
+
+  return hasDiagramNoun && hasCreateVerb;
+}
+
+/* ============================================================
+ *  Detección natural de imágenes
+ * ============================================================ */
+function detectImageIntent(text) {
+  if (!text) return null;
+
+  const lower = text.toLowerCase();
+
+  const hasCreateVerb = /\b(crea|crear|creas|crees|dibuja|dibujar|dibujas|dib[úu]jame|dibujame|haz|hazme|hacer|genera|generar|generas|gen[ée]rame|generame|realiza|realizar|realizas|elabora|elaborar|elaboras|quiero|quisiera|necesito|me\s+gustar[íi]a|puedes|podr[íi]as)\b/i.test(lower);
+
+  const hasVisualNoun = /\b(imagen|im[áa]genes|foto|fotos|dibujo|dibujos|ilustraci[óo]n|ilustraciones|infograf[íi]a|infograf[íi]as|gr[áa]fico|gr[áa]ficos)\b/i.test(lower);
+
+  if (!hasCreateVerb || !hasVisualNoun) return null;
+
+  if (/^(qu[ée]|cu[áa]l|d[óo]nde|c[óo]mo|por\s+qu[ée])\b/i.test(lower.trim())) {
+    return null;
+  }
+
+  return { description: text.trim() };
+}
+
+/* ============================================================
  *  HANDLER PRINCIPAL
  * ============================================================ */
 async function handleMessage(sock, msg) {
@@ -196,6 +340,7 @@ async function handleMessage(sock, msg) {
 
   const isAudio = !!msg.message?.audioMessage;
   const isImage = !!msg.message?.imageMessage;
+  const isDocument = !!msg.message?.documentMessage;
 
   let replyWithVoice = false;
 
@@ -204,13 +349,15 @@ async function handleMessage(sock, msg) {
     msg.message?.extendedTextMessage?.text ||
     msg.message?.imageMessage?.caption ||
     msg.message?.videoMessage?.caption ||
+    msg.message?.documentMessage?.caption ||
     '';
 
   console.log(`\n📩 [${pushName}] JID=${jid}`);
   if (isAudio) console.log('   🎤 Es una nota de voz');
   if (isImage) console.log('   🖼️  Es una imagen');
+  if (isDocument) console.log('   📄 Es un documento');
 
-  if (!text && !isAudio && !isImage) return;
+  if (!text && !isAudio && !isImage && !isDocument) return;
   if (!jid) return;
   if (jid.endsWith('@g.us')) return;
   if (jid === 'status@broadcast') return;
@@ -243,7 +390,7 @@ async function handleMessage(sock, msg) {
     }
   }
 
-  // ==================== ANÁLISIS DE IMAGEN ====================
+  // ==================== ANÁLISIS DE IMAGEN (adjunta) ====================
   if (isImage) {
     try {
       const caption = msg.message.imageMessage?.caption || '';
@@ -259,16 +406,122 @@ async function handleMessage(sock, msg) {
     }
   }
 
+  // ==================== ANÁLISIS DE DOCUMENTO ====================
+  if (isDocument) {
+    const { extractDocumentText, isSupportedDocument } = await import('./services/documents/parser.js');
+
+    const docMsg = msg.message.documentMessage;
+    const mimetype = docMsg.mimetype || '';
+    const filename = docMsg.fileName || 'documento';
+
+    if (!isSupportedDocument(mimetype)) {
+      await sendText(jid, `❌ No puedo leer archivos de tipo: ${mimetype}\n\nFormatos soportados: PDF, Word, Excel, PowerPoint`);
+      return;
+    }
+
+    try {
+      await sendText(jid, `📄 Leyendo "${filename}"...`);
+      const { text: docText } = await extractDocumentText(msg, sock);
+
+      if (!docText || docText.length < 10) {
+        await sendText(jid, '❌ No pude extraer texto del documento. ¿Está escaneado como imagen?');
+        return;
+      }
+
+      // Guardar el texto para dar contexto a Mermaid si el usuario
+      // luego pide un diagrama de "este documento"
+      lastReceivedDocument.set(jid, {
+        text: docText,
+        filename,
+        timestamp: Date.now(),
+      });
+      console.log(`   💾 Documento guardado en memoria (${docText.length} chars)`);
+
+      const caption = docMsg.caption || '';
+      text = caption
+        ? `${caption}\n\n[Contenido de "${filename}"]:\n${docText}`
+        : `[El usuario envió el archivo "${filename}". Contenido extraído:]\n\n${docText}\n\nResponde al contenido de forma útil.`;
+
+      console.log(`   ✅ Documento "${filename}" listo para el LLM`);
+    } catch (err) {
+      console.error('Error leyendo documento:', err.message);
+      await sendText(jid, `❌ No pude leer el documento, mi amor. ${err.message}`);
+      return;
+    }
+  }
+
+  // ==================== VARIABLES BASE ====================
+  console.log(`   Texto: "${text.slice(0, 200)}${text.length > 200 ? '...' : ''}"`);
+  const lower = text.trim().toLowerCase();
+
+  // ==================== DETECCIÓN DE DIAGRAMAS (Mermaid) ====================
+  if (!isAudio && !isImage && !isDocument && detectDiagramIntent(text)) {
+    console.log(`   📊 Detectada intención de diagrama (Mermaid)`);
+    const preview = text.length > 100 ? text.slice(0, 100) + '...' : text;
+    await sendText(jid, `📊 Generando diagrama...\n_"${preview}"_\n_Esto puede tardar 15-25 segundos_`);
+
+    try {
+      const mentionsDoc = /\b(documento|archivo|pdf|word|excel|ppt|pptx)\b/i.test(text);
+      let contextText = '';
+      if (mentionsDoc) {
+        const lastDoc = lastReceivedDocument.get(jid);
+        if (lastDoc && (Date.now() - lastDoc.timestamp) < 10 * 60 * 1000) {
+          contextText = lastDoc.text;
+          console.log(`   📎 Usando contexto de "${lastDoc.filename}"`);
+        } else {
+          console.log(`   ⚠️  Menciona documento pero no hay reciente en memoria`);
+        }
+      }
+
+      const { buffer, code } = await generateMermaidDiagram(text, contextText);
+
+      await sock.sendMessage(jid, {
+        image: buffer,
+        caption: `📊 Diagrama generado`,
+      });
+
+      console.log(`   ✅ Diagrama enviado (${(buffer.length / 1024).toFixed(1)} KB)`);
+      console.log(`   📝 Mermaid code:\n${code}`);
+    } catch (err) {
+      console.error('Error generando diagrama:', err.message);
+      await sendText(jid, `❌ No pude generar el diagrama: ${err.message.slice(0, 200)}`);
+    }
+    return;
+  }
+
+  // ==================== DETECCIÓN NATURAL DE IMÁGENES ARTÍSTICAS ====================
+  if (!isAudio && !isImage && !isDocument) {
+    const imageIntent = detectImageIntent(text);
+    if (imageIntent) {
+      const descripcion = imageIntent.description;
+      const preview = descripcion.length > 120 ? descripcion.slice(0, 120) + '...' : descripcion;
+      console.log(`   🎨 Detectada intención natural de imagen: "${preview}"`);
+      await sendText(jid, `🎨 Generando imagen...\n_"${preview}"_\n_Esto puede tardar 20-30 segundos_`);
+
+      try {
+        const { generateAIImage } = await import('./services/documents/image-generator.js');
+        const buffer = await generateAIImage(descripcion);
+
+        await sock.sendMessage(jid, {
+          image: buffer,
+          caption: `🎨 ${preview}`,
+        });
+
+        console.log(`   ✅ Imagen natural enviada (${(buffer.length / 1024).toFixed(1)} KB)`);
+      } catch (err) {
+        console.error('Error generando imagen natural:', err.message);
+        await sendText(jid, `❌ No pude generar la imagen: ${err.message}`);
+      }
+      return;
+    }
+  }
+
   // ==================== DETECCIÓN DE VOZ ====================
-  const lowerForVoice = text.toLowerCase();
-  const userAskedForVoice = VOICE_KEYWORDS.some((kw) => lowerForVoice.includes(kw));
+  const userAskedForVoice = VOICE_KEYWORDS.some((kw) => lower.includes(kw));
   if (userAskedForVoice) {
     replyWithVoice = true;
     console.log('   🔊 Usuario pidió respuesta en audio');
   }
-
-  console.log(`   Texto: "${text.slice(0, 200)}${text.length > 200 ? '...' : ''}"`);
-  const lower = text.trim().toLowerCase();
 
   // ==================== ATAJOS ====================
   if (lower === '!' || lower === '!ayuda-rapida' || lower === '!comandos') {
@@ -326,6 +579,289 @@ async function handleMessage(sock, msg) {
     replyWithVoice = false;
   }
 
+  // ==================== COMANDO EXPLÍCITO !diagrama / !mermaid ====================
+  if (lower.startsWith('!diagrama ') || lower.startsWith('!mermaid ')) {
+    const offset = lower.startsWith('!diagrama ') ? 10 : 9;
+    const request = text.slice(offset).trim();
+
+    if (!request) {
+      await sendText(jid, `📊 *Generar diagramas con texto legible*\n\nFormato: \`!diagrama <descripción>\`\n\n*Ejemplos:*\n\`!diagrama mapa conceptual de la NIC 16\`\n\`!diagrama mapa mental del proceso contable\`\n\`!diagrama flujograma de compras\``);
+      return;
+    }
+
+    await sendText(jid, `📊 Generando diagrama...\n_"${request.slice(0, 100)}"_`);
+    try {
+      const { buffer, code } = await generateMermaidDiagram(request);
+      await sock.sendMessage(jid, {
+        image: buffer,
+        caption: `📊 ${request}`,
+      });
+      console.log(`   ✅ Diagrama enviado (${(buffer.length / 1024).toFixed(1)} KB)`);
+      console.log(`   📝 Mermaid code:\n${code}`);
+    } catch (err) {
+      console.error('Error generando diagrama:', err.message);
+      await sendText(jid, `❌ No pude generar el diagrama: ${err.message.slice(0, 200)}`);
+    }
+    return;
+  }
+
+  // ==================== DIBUJAR IMAGEN ARTÍSTICA (Cloudflare) ====================
+  if (lower.startsWith('!dibujar ') || lower.startsWith('!draw ')) {
+    const offset = lower.startsWith('!dibujar ') ? 9 : 6;
+    const prompt = text.slice(offset).trim();
+
+    if (!prompt) {
+      await sendText(jid, `🎨 *Generar imágenes artísticas*\n\nFormato: \`!dibujar <descripción>\`\n\n*Ejemplos:*\n\`!dibujar un gato astronauta flotando en el espacio\`\n\`!dibujar un atardecer en los Andes peruanos, estilo acuarela\`\n\`!dibujar un poster minimalista sobre finanzas\``);
+      return;
+    }
+
+    await sendText(jid, `🎨 Generando imagen con IA...\n_"${prompt}"_\n_Esto puede tardar ~20-30 segundos_`);
+
+    try {
+      const { generateAIImage } = await import('./services/documents/image-generator.js');
+      const buffer = await generateAIImage(prompt);
+
+      await sock.sendMessage(jid, {
+        image: buffer,
+        caption: `🎨 ${prompt}`,
+      });
+
+      console.log(`   ✅ Imagen artística enviada (${(buffer.length / 1024).toFixed(1)} KB)`);
+    } catch (err) {
+      console.error('Error generando imagen artística:', err.message);
+      await sendText(jid, `❌ No pude generar la imagen: ${err.message}`);
+    }
+    return;
+  }
+
+  // ==================== IMAGEN SIMPLE (SVG) ====================
+  if (lower.startsWith('!imagen ') || lower.startsWith('!img ')) {
+    const offset = lower.startsWith('!imagen ') ? 8 : 5;
+    const rest = text.slice(offset).trim();
+    const parts = rest.split('|').map(s => s.trim()).filter(Boolean);
+
+    if (parts.length < 1) {
+      await sendText(jid, `🖼️ *Generar gráficos de texto*\n\nFormato: \`!imagen <título> | <contenido>\`\n\n*Ejemplo:*\n\`!imagen Mi Resumen | Contenido del gráfico\`\n\n_Para imágenes artísticas usa \`!dibujar <descripción>\`_`);
+      return;
+    }
+
+    const [titulo, ...contenidoParts] = parts;
+    const contenido = contenidoParts.join(' | ');
+
+    await sendText(jid, '🎨 Generando gráfico...');
+
+    try {
+      const { generateTextImage } = await import('./services/documents/image-generator.js');
+      const buffer = await generateTextImage(titulo, contenido);
+
+      await sock.sendMessage(jid, {
+        image: buffer,
+        caption: `🖼️ ${titulo}`,
+      });
+
+      console.log(`   ✅ Imagen enviada (${(buffer.length / 1024).toFixed(1)} KB)`);
+    } catch (err) {
+      console.error('Error generando imagen:', err.message);
+      await sendText(jid, `❌ No pude generar la imagen: ${err.message}`);
+    }
+    return;
+  }
+
+  // ==================== GENERAR DOCUMENTOS MANUALES ====================
+  if (lower.startsWith('!generar ')) {
+    const rest = text.slice(8).trim();
+    const parts = rest.split('|').map(s => s.trim()).filter(Boolean);
+
+    if (parts.length < 2) {
+      await sendText(jid, `📄 *Generar documentos manualmente*\n\nFormato: \`!generar <tipo> | <titulo> | <contenido>\`\n\n*Tipos:* excel, word, ppt, pdf\n\n*Ejemplos:*\n\`!generar pdf | Resumen Auditoría | Contenido del documento\`\n\`!generar excel | Gastos | Concepto,Monto\\nAlmuerzo,25\``);
+      return;
+    }
+
+    const [tipo, titulo, ...contenidoParts] = parts;
+    const contenido = contenidoParts.join(' | ');
+
+    await sendText(jid, `⏳ Generando ${tipo.toUpperCase()}...`);
+
+    try {
+      let buffer, filename, mimetype;
+      const gen = await import('./services/documents/generator.js');
+
+      if (tipo === 'excel') {
+        const rows = contenido.split('\\n').map(line => line.split(',').map(c => c.trim()));
+        buffer = await gen.generateExcel(titulo, rows);
+        filename = safeFilename(titulo, 'xlsx');
+        mimetype = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      } else if (tipo === 'word') {
+        const sections = [{ heading: null, paragraphs: contenido.split('\\n').filter(Boolean) }];
+        buffer = await gen.generateWord(titulo, sections);
+        filename = safeFilename(titulo, 'docx');
+        mimetype = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      } else if (tipo === 'ppt') {
+        const slides = contenido.split('\\n').filter(Boolean).map((s, i) => ({
+          title: `${titulo} — ${i + 1}`,
+          bullets: [s],
+        }));
+        buffer = await gen.generatePowerPoint(titulo, slides);
+        filename = safeFilename(titulo, 'pptx');
+        mimetype = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+      } else if (tipo === 'pdf') {
+        const sections = [{ heading: null, paragraphs: contenido.split('\\n').filter(Boolean) }];
+        buffer = await gen.generatePDF(titulo, sections);
+        filename = safeFilename(titulo, 'pdf');
+        mimetype = 'application/pdf';
+      } else {
+        await sendText(jid, `❌ Tipo "${tipo}" no reconocido. Usa: excel, word, ppt, pdf`);
+        return;
+      }
+
+      await sock.sendMessage(jid, {
+        document: buffer,
+        mimetype,
+        fileName: filename,
+      });
+
+      await sendText(jid, `✅ ${filename} · ${(buffer.length / 1024).toFixed(1)} KB`);
+      console.log(`   ✅ Documento enviado: ${filename}`);
+    } catch (err) {
+      console.error('Error generando documento:', err.message);
+      await sendText(jid, `❌ No pude generar el documento: ${err.message}`);
+    }
+    return;
+  }
+
+  // ==================== CREAR DOCUMENTOS CON IA ====================
+  if (lower.startsWith('!crear ')) {
+    const rest = text.slice(7).trim();
+    const parts = rest.split('|').map(s => s.trim()).filter(Boolean);
+
+    if (parts.length < 2) {
+      await sendText(jid, `🤖 *Crear documentos con IA*\n\nFormato: \`!crear <tipo> | <tema>\`\n\n*Tipos:*\n• \`word\` → Informe formal\n• \`pdf\` → Documento PDF\n• \`excel\` → Tabla de datos\n• \`ppt\` → Presentación\n\n*Ejemplos:*\n\`!crear word | NIA 500 evidencia de auditoría\`\n\`!crear excel | Presupuesto mensual de una MYPE\`\n\`!crear ppt | Encaje bancario en Perú\`\n\n_Después puedes usar \`!mejorar ...\` para iterar_`);
+      return;
+    }
+
+    const [tipo, ...temaParts] = parts;
+    const tema = temaParts.join(' | ');
+
+    if (!['word', 'pdf', 'excel', 'ppt'].includes(tipo)) {
+      await sendText(jid, `❌ Tipo "${tipo}" no válido. Usa: word, pdf, excel, ppt`);
+      return;
+    }
+
+    const t0 = Date.now();
+    await sendText(jid, `🧠 Redactando sobre "${tema}"...\n_Esto puede tardar unos segundos_`);
+
+    try {
+      const { aiWrite } = await import('./services/documents/ai-writer.js');
+      const { data, provider } = await aiWrite(tipo, tema);
+
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+      await sendText(jid, `📄 Contenido listo · Redactado por *${provider}* en ${elapsed}s\nGenerando archivo ${tipo.toUpperCase()}...`);
+
+      const gen = await import('./services/documents/generator.js');
+      let buffer, filename, mimetype;
+
+      if (tipo === 'word') {
+        buffer = await gen.generateWord(data.title || tema, data.sections || []);
+        filename = safeFilename(data.title || tema, 'docx');
+        mimetype = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      } else if (tipo === 'pdf') {
+        buffer = await gen.generatePDF(data.title || tema, data.sections || []);
+        filename = safeFilename(data.title || tema, 'pdf');
+        mimetype = 'application/pdf';
+      } else if (tipo === 'excel') {
+        const allRows = [data.headers || [], ...(data.rows || [])];
+        buffer = await gen.generateExcel(data.title || tema, allRows);
+        filename = safeFilename(data.title || tema, 'xlsx');
+        mimetype = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      } else if (tipo === 'ppt') {
+        buffer = await gen.generatePowerPoint(data.title || tema, data.slides || []);
+        filename = safeFilename(data.title || tema, 'pptx');
+        mimetype = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+      }
+
+      await sock.sendMessage(jid, {
+        document: buffer,
+        mimetype,
+        fileName: filename,
+      });
+
+      lastDocument.set(jid, { tipo, tema, filename });
+
+      const kb = (buffer.length / 1024).toFixed(1);
+      await sendText(jid, `✅ *${filename}* · ${kb} KB\n\n¿Quieres ajustes? Usa \`!mejorar <instrucciones>\``);
+      console.log(`   ✅ Documento IA enviado: ${filename} (${provider})`);
+    } catch (err) {
+      console.error('Error creando documento con IA:', err.message);
+      await sendText(jid, `❌ No pude generar el documento: ${err.message}`);
+    }
+    return;
+  }
+
+  // ==================== MEJORAR ÚLTIMO DOCUMENTO ====================
+  if (lower.startsWith('!mejorar')) {
+    const feedback = text.slice(8).trim();
+    const last = lastDocument.get(jid);
+
+    if (!last) {
+      await sendText(jid, '❌ No tengo un documento reciente para mejorar.\n\nUsa primero:\n`!crear word | tema`');
+      return;
+    }
+
+    if (!feedback) {
+      await sendText(jid, `🤔 Dime cómo quieres mejorarlo.\n\n*Ejemplos:*\n• \`!mejorar hazlo más corto\`\n• \`!mejorar agrega ejemplos numéricos\`\n• \`!mejorar incluye NIA 500 textual\`\n• \`!mejorar cambia el tono a más formal\`\n\n_Documento actual: ${last.filename}_`);
+      return;
+    }
+
+    const t0 = Date.now();
+    await sendText(jid, `🔧 Regenerando *${last.tipo.toUpperCase()}* sobre "${last.tema}"...\n_Feedback: "${feedback}"_\n_Esto puede tardar unos segundos_`);
+
+    try {
+      const { aiWrite } = await import('./services/documents/ai-writer.js');
+      const { data, provider } = await aiWrite(last.tipo, last.tema, feedback);
+
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+      await sendText(jid, `📄 Versión mejorada lista · ${provider} en ${elapsed}s\nGenerando archivo...`);
+
+      const gen = await import('./services/documents/generator.js');
+      let buffer, filename, mimetype;
+
+      if (last.tipo === 'word') {
+        buffer = await gen.generateWord(data.title || last.tema, data.sections || []);
+        filename = safeFilename(data.title || last.tema, 'docx');
+        mimetype = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      } else if (last.tipo === 'pdf') {
+        buffer = await gen.generatePDF(data.title || last.tema, data.sections || []);
+        filename = safeFilename(data.title || last.tema, 'pdf');
+        mimetype = 'application/pdf';
+      } else if (last.tipo === 'excel') {
+        const allRows = [data.headers || [], ...(data.rows || [])];
+        buffer = await gen.generateExcel(data.title || last.tema, allRows);
+        filename = safeFilename(data.title || last.tema, 'xlsx');
+        mimetype = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      } else if (last.tipo === 'ppt') {
+        buffer = await gen.generatePowerPoint(data.title || last.tema, data.slides || []);
+        filename = safeFilename(data.title || last.tema, 'pptx');
+        mimetype = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+      }
+
+      await sock.sendMessage(jid, {
+        document: buffer,
+        mimetype,
+        fileName: filename,
+      });
+
+      lastDocument.set(jid, { tipo: last.tipo, tema: last.tema, filename });
+
+      const kb = (buffer.length / 1024).toFixed(1);
+      await sendText(jid, `✅ *${filename}* · ${kb} KB\n\nOtro ajuste? Usa \`!mejorar ...\``);
+      console.log(`   ✅ Documento mejorado: ${filename} (${provider})`);
+    } catch (err) {
+      console.error('Error mejorando documento:', err.message);
+      await sendText(jid, `❌ No pude mejorar el documento: ${err.message}`);
+    }
+    return;
+  }
+
   // ==================== COMANDOS DE TAREAS ====================
   if (lower.startsWith('!tarea ') || lower.startsWith('!t ')) {
     const start = lower.startsWith('!tarea ') ? 7 : 3;
@@ -344,15 +880,9 @@ async function handleMessage(sock, msg) {
     }
 
     try {
-      const id = await createTask(jid, {
-        title: cleanTitle,
-        dueDate,
-      });
-
+      const id = await createTask(jid, { title: cleanTitle, dueDate });
       const dueText = dueDate ? `\n📅 Vence: *${formatDueDate(dueDate)}*` : '';
-      const reminderText = dueDate
-        ? '\nTe aviso el día anterior y el mismo día 💙'
-        : '';
+      const reminderText = dueDate ? '\nTe aviso el día anterior y el mismo día 💙' : '';
 
       await humanDelay();
       await sendText(jid, `📝 Anotado (tarea #${id}):\n*${cleanTitle}*${dueText}${reminderText}`);
@@ -366,23 +896,18 @@ async function handleMessage(sock, msg) {
   if (lower === '!pendientes' || lower === '!tareas' || lower === '!lista') {
     try {
       const tasks = await getPendingTasks(jid);
-
       if (tasks.length === 0) {
         await humanDelay();
         await sendText(jid, '✨ No tienes tareas pendientes, mi amor. ¡Sigue así!');
         return;
       }
-
       const lines = [`📋 *Tareas pendientes (${tasks.length})*\n`];
       for (const t of tasks.slice(0, 15)) {
         const due = t.due_date ? ` — 📅 ${formatDueDate(t.due_date)}` : '';
         lines.push(`*#${t.id}* ${t.title}${due}`);
       }
-      if (tasks.length > 15) {
-        lines.push(`\n_(+${tasks.length - 15} más)_`);
-      }
+      if (tasks.length > 15) lines.push(`\n_(+${tasks.length - 15} más)_`);
       lines.push(`\nCompleta con: !completar <n>`);
-
       await humanDelay();
       await sendText(jid, lines.join('\n'));
     } catch (err) {
@@ -458,7 +983,6 @@ async function handleMessage(sock, msg) {
       await sendText(jid, '✨ No tienes una sesión de Pomodoro activa.');
       return;
     }
-
     const s = getPomodoro(jid);
     await humanDelay();
     await sendText(jid, `⏱️ *Estado del Pomodoro*\n\n${s.type === 'work' ? '🔴 Foco' : '☕ Descanso'}\nRonda ${s.currentRound}/${s.totalRounds}\nQuedan ~${s.remainingMin} min`);
@@ -470,7 +994,6 @@ async function handleMessage(sock, msg) {
       await sendText(jid, '✨ No había ninguna sesión activa.');
       return;
     }
-
     stopPomodoro(jid);
     await humanDelay();
     await sendText(jid, '🛑 Sesión cancelada. Cuando quieras retomar, usa !pomodoro.');
@@ -483,10 +1006,7 @@ async function handleMessage(sock, msg) {
     const input = text.slice(start).trim();
 
     if (!input || !input.includes('|')) {
-      await sendText(
-        jid,
-        '❌ Uso: `!flashcard pregunta | respuesta`\n\nEjemplo:\n!flashcard ¿Qué es el encaje bancario? | Reserva obligatoria en el BCRP, 4-6% de depósitos'
-      );
+      await sendText(jid, '❌ Uso: `!flashcard pregunta | respuesta`\n\nEjemplo:\n!flashcard ¿Qué es el encaje bancario? | Reserva obligatoria en el BCRP, 4-6% de depósitos');
       return;
     }
 
@@ -501,10 +1021,7 @@ async function handleMessage(sock, msg) {
     try {
       const id = await createFlashcard(jid, question.trim(), answer);
       await humanDelay();
-      await sendText(
-        jid,
-        `🎴 Flashcard #${id} guardada\n\n*P:* ${question.trim()}\n*R:* ${answer}`
-      );
+      await sendText(jid, `🎴 Flashcard #${id} guardada\n\n*P:* ${question.trim()}\n*R:* ${answer}`);
     } catch (err) {
       console.error('Error creando flashcard:', err.message);
       await sendText(jid, '❌ No pude guardar la flashcard.');
@@ -515,28 +1032,22 @@ async function handleMessage(sock, msg) {
   if (lower === '!flashcards' || lower === '!tarjetas') {
     try {
       const cards = await getFlashcards(jid);
-
       if (cards.length === 0) {
         await humanDelay();
         await sendText(jid, '✨ No tienes flashcards todavía, mi amor.\n\nCrea una con:\n`!flashcard pregunta | respuesta`');
         return;
       }
-
       const stats = await getFlashcardStats(jid);
       const lines = [`🎴 *Tus flashcards (${stats.total})*\n`];
       lines.push(`✅ Dominadas: ${stats.mastered}`);
       lines.push(`📚 Por repasar: ${stats.toReview}\n`);
 
       for (const c of cards.slice(0, 10)) {
-        const accuracy = c.times_shown > 0
-          ? Math.round((c.times_right / c.times_shown) * 100)
-          : 0;
+        const accuracy = c.times_shown > 0 ? Math.round((c.times_right / c.times_shown) * 100) : 0;
         const badge = c.times_shown === 0 ? '🆕' : accuracy >= 80 ? '✅' : accuracy >= 50 ? '🟡' : '🔴';
         lines.push(`${badge} *#${c.id}* ${c.question}`);
       }
-      if (cards.length > 10) {
-        lines.push(`\n_(+${cards.length - 10} más)_`);
-      }
+      if (cards.length > 10) lines.push(`\n_(+${cards.length - 10} más)_`);
 
       await humanDelay();
       await sendText(jid, lines.join('\n'));
@@ -552,7 +1063,6 @@ async function handleMessage(sock, msg) {
       await sendText(jid, '⏳ Ya tienes un quiz activo. Respóndelo o escribe `!quiz-stop` para cancelar.');
       return;
     }
-
     try {
       const parts = text.split(/\s+/);
       let count = 5;
@@ -560,25 +1070,16 @@ async function handleMessage(sock, msg) {
         const n = parseInt(parts[1], 10);
         if (!isNaN(n) && n > 0 && n <= 20) count = n;
       }
-
       const cards = await getRandomFlashcards(jid, count);
-
       if (cards.length === 0) {
         await humanDelay();
         await sendText(jid, '✨ No tienes flashcards todavía.\n\nCrea una con:\n`!flashcard pregunta | respuesta`');
         return;
       }
-
       startQuiz(jid, cards);
       const q = nextQuestion(jid);
-
       await humanDelay();
-      await sendText(
-        jid,
-        `📚 *Quiz iniciado — ${cards.length} preguntas*\n\n` +
-        `📝 *Pregunta ${q.index}/${q.total}:*\n${q.flashcard.question}\n\n` +
-        `_Responde cuando quieras. Escribe "pista" si necesitas ayuda o "saltar" para pasar._`
-      );
+      await sendText(jid, `📚 *Quiz iniciado — ${cards.length} preguntas*\n\n` + `📝 *Pregunta ${q.index}/${q.total}:*\n${q.flashcard.question}\n\n` + `_Responde cuando quieras. Escribe "pista" si necesitas ayuda o "saltar" para pasar._`);
     } catch (err) {
       console.error('Error iniciando quiz:', err.message);
       await sendText(jid, '❌ No pude iniciar el quiz.');
@@ -624,10 +1125,7 @@ async function handleMessage(sock, msg) {
 
     const parsed = parseExpense(input);
     if (parsed.error) {
-      await sendText(
-        jid,
-        `❌ ${parsed.error}\n\n*Ejemplos:*\n• \`!gasto 25 almuerzo\`\n• \`!gasto 15.50 taxi\`\n• \`!gasto 30 libro | estudio\``
-      );
+      await sendText(jid, `❌ ${parsed.error}\n\n*Ejemplos:*\n• \`!gasto 25 almuerzo\`\n• \`!gasto 15.50 taxi\`\n• \`!gasto 30 libro | estudio\``);
       return;
     }
 
@@ -638,33 +1136,23 @@ async function handleMessage(sock, msg) {
     }
 
     await humanDelay();
-    await sendText(
-      jid,
-      `💰 Gasto #${id} registrado\n\n` +
-      `💵 *${formatAmount(parsed.amount)}*\n` +
-      `📝 ${parsed.description}\n` +
-      `${formatCategory(parsed.category)}`
-    );
+    await sendText(jid, `💰 Gasto #${id} registrado\n\n` + `💵 *${formatAmount(parsed.amount)}*\n` + `📝 ${parsed.description}\n` + `${formatCategory(parsed.category)}`);
     return;
   }
 
   if (lower === '!gastos' || lower === '!gastos-hoy' || lower === '!gastos-dia') {
     const today = new Date().toISOString().slice(0, 10);
     const data = await getExpensesSum(jid, { date: today });
-
     await humanDelay();
-
     if (data.count === 0) {
       await sendText(jid, '✨ No has registrado gastos hoy, mi amor.');
       return;
     }
-
     const lines = [`💰 *Gastos de hoy*\n`];
     for (const e of data.expenses.slice(0, 15)) {
       lines.push(`• *${formatAmount(e.amount)}* — ${e.description} ${formatCategory(e.category)}`);
     }
     lines.push(`\n💵 *Total: ${formatAmount(data.total)}* (${data.count} gasto${data.count !== 1 ? 's' : ''})`);
-
     await sendText(jid, lines.join('\n'));
     return;
   }
@@ -673,26 +1161,21 @@ async function handleMessage(sock, msg) {
     const today = new Date();
     const from = new Date(today);
     from.setDate(today.getDate() - 6);
-
     const data = await getExpensesSum(jid, {
       fromDate: from.toISOString().slice(0, 10),
       toDate: today.toISOString().slice(0, 10),
     });
-
     await humanDelay();
-
     if (data.count === 0) {
       await sendText(jid, '✨ No has registrado gastos esta semana.');
       return;
     }
-
     const lines = [`💰 *Gastos de la semana*\n`];
     lines.push(`💵 *Total: ${formatAmount(data.total)}* (${data.count} gastos)\n`);
     lines.push(`*Por categoría:*`);
     for (const [cat, sum] of Object.entries(data.byCategory).sort((a, b) => b[1] - a[1])) {
       lines.push(`${formatCategory(cat)}: ${formatAmount(sum)}`);
     }
-
     await sendText(jid, lines.join('\n'));
     return;
   }
@@ -700,31 +1183,24 @@ async function handleMessage(sock, msg) {
   if (lower === '!gastos-mes' || lower === '!gastos-mensual') {
     const today = new Date();
     const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
-
     const data = await getExpensesSum(jid, {
       fromDate: firstDay.toISOString().slice(0, 10),
       toDate: today.toISOString().slice(0, 10),
     });
-
     await humanDelay();
-
     if (data.count === 0) {
       await sendText(jid, '✨ No has registrado gastos este mes.');
       return;
     }
-
     const monthName = today.toLocaleDateString('es-PE', { month: 'long', year: 'numeric' });
-
     const lines = [`💰 *Gastos de ${monthName}*\n`];
     lines.push(`💵 *Total: ${formatAmount(data.total)}* (${data.count} gastos)\n`);
     lines.push(`*Por categoría:*`);
-
     const sorted = Object.entries(data.byCategory).sort((a, b) => b[1] - a[1]);
     for (const [cat, sum] of sorted) {
       const pct = Math.round((sum / data.total) * 100);
       lines.push(`${formatCategory(cat)}: ${formatAmount(sum)} (${pct}%)`);
     }
-
     await sendText(jid, lines.join('\n'));
     return;
   }
@@ -733,12 +1209,10 @@ async function handleMessage(sock, msg) {
     const start = lower.startsWith('!borrar-gasto ') ? 14 : 7;
     const idStr = text.slice(start).trim();
     const id = parseInt(idStr, 10);
-
     if (isNaN(id)) {
       await sendText(jid, '❌ Uso: `!borrar-gasto <id>`');
       return;
     }
-
     const ok = await deleteExpense(id);
     await humanDelay();
     await sendText(jid, ok ? `🗑️ Gasto #${id} eliminado.` : `❌ No encontré el gasto #${id}.`);
@@ -747,6 +1221,43 @@ async function handleMessage(sock, msg) {
 
   // ==================== SISTEMA ====================
   if (lower === '!ping') { await handlePing(jid); return; }
+
+  if (lower === '!modelos-nvidia' || lower === '!nvidia') {
+    await sendText(jid, '🔍 Consultando modelos NVIDIA...');
+    try {
+      const OpenAI = (await import('openai')).default;
+      const client = new OpenAI({
+        apiKey: config.nvidiaApiKey,
+        baseURL: 'https://integrate.api.nvidia.com/v1',
+      });
+      const models = await client.models.list();
+      const list = models.data.map((m) => m.id).sort();
+
+      const relevantes = list.filter(
+        (m) =>
+          m.includes('nemotron') ||
+          m.includes('llama-3.3') ||
+          m.includes('deepseek-v3') ||
+          m.includes('qwen')
+      );
+
+      const lines = [`🤖 *Modelos NVIDIA disponibles (${list.length})*\n`];
+      lines.push('⭐ *Recomendados:*');
+      for (const id of relevantes.slice(0, 15)) {
+        lines.push(`• \`${id}\``);
+      }
+      if (relevantes.length > 15) {
+        lines.push(`\n_(+${relevantes.length - 15} más)_`);
+      }
+      lines.push('\n_Usa `!ping` para probar los 4 proveedores_');
+
+      await sendText(jid, lines.join('\n'));
+    } catch (err) {
+      console.error('Error listando NVIDIA:', err.message);
+      await sendText(jid, `❌ Error: ${err.message}`);
+    }
+    return;
+  }
 
   if (lower === '!help' || lower === '!ayuda') {
     await humanDelay();
@@ -760,7 +1271,6 @@ async function handleMessage(sock, msg) {
     const study = await getStudyStats(jid, 30);
     const tasks = await getPendingTasks(jid);
     const fcStats = await getFlashcardStats(jid);
-
     await sendText(jid, `📊 *Estadísticas*
 
 💬 Mensajes: ${s.messages}
@@ -782,7 +1292,6 @@ async function handleMessage(sock, msg) {
   if (lower === '!progreso' || lower === '!dashboard' || lower === '!avance') {
     try {
       await humanDelay();
-
       const [s, study30, tasks, fcStats, expenseMonth, expenseWeek] = await Promise.all([
         getStats(jid),
         getStudyStats(jid, 30),
@@ -807,17 +1316,9 @@ async function handleMessage(sock, msg) {
         })(),
       ]);
 
-      // ---- Racha de estudio ----
-      const allConfirmations = await getPendingStudyConfirmation(jid); // dummy para no romper
-      // (no podemos obtener todas las confirmaciones fácilmente, calculamos aproximado)
-
-      const pctStudy = study30.total > 0
-        ? Math.round((study30.studied / study30.total) * 100)
-        : 0;
-
+      const pctStudy = study30.total > 0 ? Math.round((study30.studied / study30.total) * 100) : 0;
       const lines = [`📊 *Tu progreso*\n`];
 
-      // Estudio
       lines.push(`📚 *Estudio (30 días)*`);
       if (study30.total === 0) {
         lines.push(`• Sin datos todavía`);
@@ -831,7 +1332,6 @@ async function handleMessage(sock, msg) {
       }
       lines.push('');
 
-      // Tareas
       lines.push(`📝 *Tareas*`);
       lines.push(`• Pendientes: *${tasks.length}*`);
       if (tasks.length > 0) {
@@ -841,7 +1341,6 @@ async function handleMessage(sock, msg) {
       }
       lines.push('');
 
-      // Flashcards
       lines.push(`🎴 *Flashcards*`);
       if (fcStats.total === 0) {
         lines.push(`• Sin tarjetas todavía`);
@@ -853,7 +1352,6 @@ async function handleMessage(sock, msg) {
       }
       lines.push('');
 
-      // Gastos
       lines.push(`💰 *Gastos*`);
       lines.push(`• Este mes: *${formatAmount(expenseMonth.total)}* (${expenseMonth.count})`);
       lines.push(`• Esta semana: *${formatAmount(expenseWeek.total)}* (${expenseWeek.count})`);
@@ -866,7 +1364,6 @@ async function handleMessage(sock, msg) {
       }
       lines.push('');
 
-      // Mensajes totales
       lines.push(`💬 *Conversación*`);
       lines.push(`• Mensajes guardados: ${s.messages}`);
       lines.push('');
@@ -1011,6 +1508,14 @@ async function handleMessage(sock, msg) {
     return;
   }
 
+  if (lower === '!test-sunday') {
+    await humanDelay();
+    await sendText(jid, '⏳ Simulando preparación del lunes...');
+    const { sendSundayPrep } = await import('./cron/reminders.js');
+    await sendSundayPrep();
+    return;
+  }
+
   if (lower === '!resumen-semana' || lower === '!reporte') {
     await humanDelay();
     await sendText(jid, '⏳ Generando resumen semanal...');
@@ -1043,22 +1548,10 @@ async function handleMessage(sock, msg) {
           const summary = getQuizSummary(jid);
           endQuiz(jid);
           await humanDelay();
-          await sendText(
-            jid,
-            `📊 *Quiz completado*\n\n` +
-            `✅ Correctas: ${summary.correct}/${summary.total}\n` +
-            `📈 Precisión: ${summary.percentage}%\n\n` +
-            (summary.percentage >= 80 ? '🔥 ¡Excelente, mi amor! 💪' :
-             summary.percentage >= 50 ? '👍 Buen intento. Sigue practicando.' :
-             '📚 Necesitas repasar más. ¡Vamos!')
-          );
+          await sendText(jid, `📊 *Quiz completado*\n\n` + `✅ Correctas: ${summary.correct}/${summary.total}\n` + `📈 Precisión: ${summary.percentage}%\n\n` + (summary.percentage >= 80 ? '🔥 ¡Excelente, mi amor! 💪' : summary.percentage >= 50 ? '👍 Buen intento. Sigue practicando.' : '📚 Necesitas repasar más. ¡Vamos!'));
         } else {
           await humanDelay();
-          await sendText(
-            jid,
-            `❌ La respuesta era:\n*${q.flashcard.answer}*\n\n` +
-            `📝 *Pregunta ${nextQ.index}/${nextQ.total}:*\n${nextQ.flashcard.question}`
-          );
+          await sendText(jid, `❌ La respuesta era:\n*${q.flashcard.answer}*\n\n` + `📝 *Pregunta ${nextQ.index}/${nextQ.total}:*\n${nextQ.flashcard.question}`);
         }
         return;
       }
@@ -1073,31 +1566,13 @@ async function handleMessage(sock, msg) {
         endQuiz(jid);
         await humanDelay();
         const emoji = result.correct ? '✅' : '❌';
-        const feedback = result.correct
-          ? '¡Correcto!'
-          : `La respuesta era:\n*${q.flashcard.answer}*`;
+        const feedback = result.correct ? '¡Correcto!' : `La respuesta era:\n*${q.flashcard.answer}*`;
 
-        await sendText(
-          jid,
-          `${emoji} ${feedback}\n\n` +
-          `📊 *Quiz completado*\n` +
-          `✅ Correctas: ${summary.correct}/${summary.total}\n` +
-          `📈 Precisión: ${summary.percentage}%\n\n` +
-          (summary.percentage >= 80 ? '🔥 ¡Excelente, mi amor! 💪' :
-           summary.percentage >= 50 ? '👍 Buen intento. Sigue practicando.' :
-           '📚 Necesitas repasar más. ¡Vamos!')
-        );
+        await sendText(jid, `${emoji} ${feedback}\n\n` + `📊 *Quiz completado*\n` + `✅ Correctas: ${summary.correct}/${summary.total}\n` + `📈 Precisión: ${summary.percentage}%\n\n` + (summary.percentage >= 80 ? '🔥 ¡Excelente, mi amor! 💪' : summary.percentage >= 50 ? '👍 Buen intento. Sigue practicando.' : '📚 Necesitas repasar más. ¡Vamos!'));
       } else {
         await humanDelay();
-        const feedback = result.correct
-          ? '✅ ¡Correcto!'
-          : `❌ La respuesta era:\n*${q.flashcard.answer}*`;
-
-        await sendText(
-          jid,
-          `${feedback}\n\n` +
-          `📝 *Pregunta ${nextQ.index}/${nextQ.total}:*\n${nextQ.flashcard.question}`
-        );
+        const feedback = result.correct ? '✅ ¡Correcto!' : `❌ La respuesta era:\n*${q.flashcard.answer}*`;
+        await sendText(jid, `${feedback}\n\n` + `📝 *Pregunta ${nextQ.index}/${nextQ.total}:*\n${nextQ.flashcard.question}`);
       }
       return;
     }
@@ -1114,7 +1589,7 @@ async function handleMessage(sock, msg) {
     const history = await getRecentMessages(jid, config.memoryMaxShortTerm);
     const contextMessages = history.slice(0, -1);
     const messages = [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: buildSystemPrompt() },
       ...contextMessages,
       { role: 'user', content: userText },
     ];
@@ -1170,16 +1645,34 @@ async function handlePing(jid) {
 }
 
 /* ============================================================
+ *  Wrapper con cola de mensajes por usuario
+ *  Todos los mensajes del MISMO jid pasan por turnos, uno tras
+ *  otro. Distintos jid siguen procesándose en paralelo.
+ * ============================================================ */
+async function handleMessageQueued(sock, msg) {
+  const jid = msg.key?.remoteJid;
+  if (!jid) {
+    // Sin jid no podemos encolar; procesar directo
+    return handleMessage(sock, msg);
+  }
+  return enqueueForUser(jid, () => handleMessage(sock, msg));
+}
+
+/* ============================================================
  *  SERVIDOR HTTP
  * ============================================================ */
 const PORT = process.env.PORT || 3000;
 const server = createServer((req, res) => {
   if (req.url === '/health') {
+    const sock = getSocket();
+    const waConnected = !!sock?.user?.id;
+
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       status: 'ok',
       service: 'athena-bot-whatsapp',
-      uptime: process.uptime(),
+      whatsapp: waConnected ? 'connected' : 'starting',
+      uptime: Math.round(process.uptime()),
       timestamp: new Date().toISOString(),
     }));
   } else {
@@ -1195,13 +1688,22 @@ server.listen(PORT, () => {
  *  ARRANQUE
  * ============================================================ */
 (async () => {
+  console.log('\n🚀 Iniciando Athena Bot...\n');
   try {
-    console.log('\n🚀 Iniciando Athena Bot...\n');
-    await startWhatsApp(handleMessage);
+    await startWhatsApp(handleMessageQueued);
+    console.log('✅ WhatsApp iniciado. Arrancando cron...');
     startCronJobs();
+    console.log('✅ Cron arrancado. Bot listo.');
   } catch (err) {
-    console.error('❌ Error fatal:', err);
-    process.exit(1);
+    console.error('❌ Error fatal en startWhatsApp:');
+    console.error(err);
+    if (err.stack) console.error(err.stack);
+    console.error('⏳ Reintentando en 15 segundos...');
+    setTimeout(() => {
+      startWhatsApp(handleMessageQueued)
+        .then(() => startCronJobs())
+        .catch((e) => console.error('❌ Falló el reintento:', e));
+    }, 15000);
   }
 })();
 

@@ -3,7 +3,7 @@ services:
     name: athena-bot-whatsapp
     env: node
     region: oregon
-    plan: free
+    plan: starter
     buildCommand: npm ci
     startCommand: npm start
     healthCheckPath: /health
@@ -31,11 +31,9 @@ services:
       - key: OWNER_LID
         value: 3389215797354
       - key: REPLY_DELAY_MIN
-        value: "3"
+        value: "2"
       - key: REPLY_DELAY_MAX
-        value: "12"
-      - key: MEMORY_DB_PATH
-        value: ./data/athena.db
+        value: "6"
       - key: MEMORY_MAX_SHORT_TERM
         value: "20"
       - key: SUPABASE_URL

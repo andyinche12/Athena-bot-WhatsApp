@@ -22,7 +22,12 @@ const CHAIN = [
  * Si falla, prueba el siguiente de la cadena.
  *
  * @param {Array<{role:string, content:string}>} messages
- * @param {Object} opts - { preferred?: 'groq'|'gemini'|... , model?: string }
+ * @param {Object} opts
+ *   - preferred?: 'groq' | 'nvidia' | 'gemini' | 'openrouter'
+ *   - model?: string  (override del modelo por defecto del provider)
+ *   - jsonMode?: boolean  (fuerza response_format=json_object)
+ *   - maxTokens?: number
+ *   - temperature?: number
  * @returns {Promise<{text:string, provider:string, model:string, usage:object}>}
  */
 export async function askLLM(messages, opts = {}) {
@@ -43,9 +48,14 @@ export async function askLLM(messages, opts = {}) {
     try {
       const t0 = Date.now();
       logger.info(`🤖 Intentando ${provider.name}...`);
-      const result = await provider.fn(messages, opts.model);
+
+      // Pasa opts completo al provider (jsonMode, maxTokens, temperature)
+      const result = await provider.fn(messages, opts.model, opts);
+
       const ms = Date.now() - t0;
-      logger.info(`✅ ${provider.name} respondió en ${ms}ms (modelo: ${result.model})`);
+      logger.info(
+        `✅ ${provider.name} respondió en ${ms}ms (modelo: ${result.model})`
+      );
       return result;
     } catch (err) {
       const msg = err?.message || String(err);
@@ -67,7 +77,11 @@ export async function pingProvider(name) {
   if (!provider) throw new Error(`Proveedor desconocido: ${name}`);
 
   const t0 = Date.now();
-  const r = await provider.fn([{ role: 'user', content: 'Responde solo: OK' }]);
+  const r = await provider.fn(
+    [{ role: 'user', content: 'Responde solo: OK' }],
+    undefined,
+    { maxTokens: 20, temperature: 0 }
+  );
   const ms = Date.now() - t0;
   return { provider: name, model: r.model, ms, text: r.text };
 }

@@ -22,13 +22,18 @@ export async function startWhatsApp(onMessage) {
   }
   isStarting = true;
 
+  const log = (msg) => console.log(`[${new Date().toISOString().slice(11, 23)}] ${msg}`);
+
   try {
-    // 🔐 Sesión persistente en Supabase
+    log('🔍 Paso 1/6: Cargando AuthState de Supabase...');
     const { state, saveCreds } = await useSupabaseAuthState();
+    log('✅ Paso 1/6 completo: AuthState cargado');
+
+    log('🔍 Paso 2/6: Consultando versión de Baileys...');
     const { version } = await fetchLatestBaileysVersion();
+    log(`✅ Paso 2/6 completo: v${version.join('.')}`);
 
-    logger.info(`📡 Baileys v${version.join('.')} | Sesión: Supabase`);
-
+    log('🔍 Paso 3/6: Creando socket Baileys...');
     sock = makeWASocket({
       version,
       auth: {
@@ -36,20 +41,23 @@ export async function startWhatsApp(onMessage) {
         keys: makeCacheableSignalKeyStore(state.keys, logger),
       },
       printQRInTerminal: false,
-      logger: pino({ level: 'silent' }),
+      logger: pino({ level: 'warn' }), // 'warn' para ver errores internos de Baileys
       browser: Browsers.macOS('Desktop'),
       generateHighQualityLinkPreview: false,
       syncFullHistory: false,
       markOnlineOnConnect: true,
       getMessage: async () => undefined,
     });
+    log('✅ Paso 3/6 completo: socket creado');
 
-    // 🔍 LOG: cuando Baileys dispara creds.update
+    log('🔍 Paso 4/6: Registrando creds.update...');
     sock.ev.on('creds.update', () => {
       console.log('\n🔔 [EVENT] creds.update disparado por Baileys');
       saveCreds();
     });
+    log('✅ Paso 4/6 completo');
 
+    log('🔍 Paso 5/6: Registrando connection.update...');
     sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
 
@@ -88,10 +96,9 @@ export async function startWhatsApp(onMessage) {
         }
       }
     });
+    log('✅ Paso 5/6 completo');
 
-    console.log('🔔 [DEBUG] Listener messages.upsert registrado');
-
-    // 🛡️ Anti-duplicado: Set en memoria de IDs ya procesados
+    log('🔍 Paso 6/6: Registrando messages.upsert...');
     const processedIds = new Set();
     const MAX_CACHE = 500;
 
@@ -122,13 +129,11 @@ export async function startWhatsApp(onMessage) {
           continue;
         }
 
-        // 🆕 Ignorar mensajes históricos (type=append) — solo procesar nuevos
         if (type === 'append') {
           console.log('   ⏭️  Ignorado (mensaje histórico)');
           continue;
         }
 
-        // 🛡️ Anti-duplicado
         if (msgId && processedIds.has(msgId)) {
           console.log('   ⏭️  Ignorado (ya procesado antes)');
           continue;
@@ -150,11 +155,14 @@ export async function startWhatsApp(onMessage) {
         }
       }
     });
+    log('✅ Paso 6/6 completo');
 
+    log('🎉 startWhatsApp terminado — retornando socket');
     return sock;
   } catch (err) {
     isStarting = false;
     logger.error({ err }, '❌ Error iniciando WhatsApp');
+    console.error('❌ STACK:', err.stack);
     throw err;
   }
 }
@@ -169,8 +177,6 @@ export async function sendText(jid, text) {
 
 /**
  * Envía una nota de voz (PTT) por WhatsApp.
- * @param {string} jid - Destinatario
- * @param {Buffer} audioBuffer - Buffer del audio en OGG/Opus
  */
 export async function sendAudio(jid, audioBuffer) {
   if (!sock) throw new Error('Cliente WhatsApp no inicializado');
@@ -181,7 +187,7 @@ export async function sendAudio(jid, audioBuffer) {
   return sock.sendMessage(jid, {
     audio: audioBuffer,
     mimetype: 'audio/ogg; codecs=opus',
-    ptt: true, // Push-to-talk = nota de voz
+    ptt: true,
   });
 }
 

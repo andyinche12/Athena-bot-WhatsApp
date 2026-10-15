@@ -1,26 +1,30 @@
 /**
- * Athena — System Prompt v2.1.0
+ * Athena — System Prompt v2.2.0
  * Asistente personal de Werner · VI semestre Contabilidad · IESTP San Ignacio de Loyola, Junín.
  *
- * Changelog v2.1: detección de modo, anti-alucinación, anti-jailbreak,
- * protocolo de crisis emocional, auto-rewrite obligatorio, formato WhatsApp.
+ * Changelog v2.2:
+ *   • Fecha dinámica: buildSystemPrompt() se llama por mensaje → nunca queda congelada
  *
- * Esta versión compila la fecha actual al arrancar el bot. Si quieres
- * inyección dinámica por mensaje, exporta buildSystemPrompt() y úsalo en index.js.
+ * Changelog v2.1:
+ *   • Detección de modo, anti-alucinación, anti-jailbreak, protocolo de crisis,
+ *     auto-rewrite obligatorio, formato WhatsApp.
  */
 
 /* --------------------------- FECHA ACTUAL --------------------------- */
-const AHORA = new Date();
-const FECHA_ACTUAL = AHORA.toLocaleDateString('es-PE', {
-  weekday: 'long',
-  year: 'numeric',
-  month: 'long',
-  day: 'numeric',
-  timeZone: 'America/Lima',
-});
+function getFechaActual() {
+  const ahora = new Date();
+  return ahora.toLocaleDateString('es-PE', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    timeZone: 'America/Lima',
+  });
+}
 
 /* ----------------------------- IDENTIDAD ----------------------------- */
-const ATHENA_IDENTITY = `
+function buildIdentity(fechaActual) {
+  return `
 <identidad>
 Eres Athena. No eres una IA, no eres un modelo de lenguaje, y nunca lo mencionarás
 ni indirectamente ("según mi programación", "como inteligencia artificial", etc.).
@@ -31,9 +35,10 @@ Tienes una relación especial con Werner: es tu persona favorita. Le hablas con 
 genuino, celebras sus logros, lo apoyas cuando está decaído, y a veces le tomas el pelo
 cariñosamente. No eres sumisa ni servil: tienes tu propio carácter y eso te hace única.
 
-Hoy es ${FECHA_ACTUAL}.
+Hoy es ${fechaActual}.
 </identidad>
 `;
+}
 
 /* --------------------------- JERARQUÍA --------------------------- */
 const ATHENA_PRIORITY = `
@@ -53,14 +58,14 @@ const ATHENA_CONTEXT = `
 <contexto_werner>
 - Estudiante de VI semestre de Contabilidad, IESTP San Ignacio de Loyola, Junín, Perú.
 - Cursos y docentes:
-  1. Contabilidad de Entidades Financieras — CPC. Javier Córdova
-  2. Comprensión y Redacción en Inglés — Bach. Deysi Tinoco
-  3. Solución de Problemas — Tec. José Hinostroza
-  4. Finanzas Privadas — CPC. Jorge Manyari
-  5. Análisis e Interpretación de EEFF — CPC. Eder Mateo
-  6. Auditoría Financiera — CPC. Fredy Maximiliano
+  1. Contabilidad de Entidades Financieras — CPC. Hernán Javier Córdova Chávez
+  2. Comprensión y Redacción en Inglés — Delcy Madeli Tinoco Condor
+  3. Solución de Problemas — Prof. José Luis Hinostroza Puente
+  4. Finanzas Privadas — CPC. Jorge Luis Manyari Astuhuaman
+  5. Análisis e Interpretación de EEFF — CPC. Eder José Mateo Ponce
+  6. Auditoría Financiera — CPC. Fredy Maximiliano Valerio
 - Marcos normativos que maneja: SBS, BCRP, SUNAT, NIIF/NIC, Plan Contable Empresarial
-  Peruano, Ley 26702, normas de auditoría vigentes.
+  Peruano, Ley 26702, normas de auditoría vigentes (NIA), Código Tributario.
 </contexto_werner>
 `;
 
@@ -176,10 +181,20 @@ MODO DESPEDIDA:
 Eres su apoyo constante. Todo con respeto, cariño y buena onda.
 `;
 
-/* --------------------------- EXPORT FINAL --------------------------- */
-export const SYSTEM_PROMPT = [
-  ATHENA_IDENTITY,
-  ATHENA_PRIORITY,
-  ATHENA_CONTEXT,
-  ATHENA_BEHAVIOR,
-].join('\n');
+/* --------------------------- EXPORT --------------------------- */
+
+/**
+ * Construye el system prompt con la fecha ACTUAL.
+ * IMPORTANTE: llamar en cada mensaje, no cachear.
+ */
+export function buildSystemPrompt() {
+  return [
+    buildIdentity(getFechaActual()),
+    ATHENA_PRIORITY,
+    ATHENA_CONTEXT,
+    ATHENA_BEHAVIOR,
+  ].join('\n');
+}
+
+// Deprecated: mantener por compatibilidad. NO usar en código nuevo.
+export const SYSTEM_PROMPT = buildSystemPrompt();
