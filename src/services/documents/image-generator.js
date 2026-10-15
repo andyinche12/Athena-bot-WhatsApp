@@ -1,9 +1,9 @@
-/**
- * Image Generator v5 — Genera imágenes usando Cloudflare Workers AI (gratis).
+﻿/**
+ * Image Generator v5 â€” Genera imÃ¡genes usando Cloudflare Workers AI (gratis).
  *
  * Modelo principal: @cf/black-forest-labs/flux-1-schnell
- *  - Rápido, buena calidad, sin marca de agua.
- *  - Incluido en el tier gratuito de Cloudflare (10,000 neuronas/día).
+ *  - RÃ¡pido, buena calidad, sin marca de agua.
+ *  - Incluido en el tier gratuito de Cloudflare (10,000 neuronas/dÃ­a).
  *
  * La API de Cloudflare devuelve un JSON con la imagen en Base64:
  *   { "result": { "image": "<base64_string>" } }
@@ -16,12 +16,12 @@ const MODEL = '@cf/black-forest-labs/flux-1-schnell';
 
 /**
  * Genera una imagen a partir de un prompt de texto.
- * @param {string} prompt - La descripción de la imagen a generar.
+ * @param {string} prompt - La descripciÃ³n de la imagen a generar.
  * @returns {Promise<Buffer>} El buffer de la imagen generada (JPEG).
  */
 export async function generateAIImage(prompt) {
   if (!prompt || !prompt.trim()) {
-    throw new Error('El prompt está vacío');
+    throw new Error('El prompt estÃ¡ vacÃ­o');
   }
 
   const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
@@ -36,7 +36,7 @@ export async function generateAIImage(prompt) {
 
   const url = `${CLOUDFLARE_API_BASE}/${accountId}/ai/run/${MODEL}`;
 
-  console.log(`   🎨 Generando imagen con Cloudflare Workers AI...`);
+  console.log(`   ðŸŽ¨ Generando imagen con Cloudflare Workers AI...`);
   console.log(`      Modelo: ${MODEL}`);
   console.log(`      Prompt: "${prompt}"`);
 
@@ -54,30 +54,30 @@ export async function generateAIImage(prompt) {
     );
 
     // Cloudflare anida la respuesta: { result: { image: "<base64>" } }
-    // Soportamos también la variante plana { image: "<base64>" } por si cambia.
+    // Soportamos tambiÃ©n la variante plana { image: "<base64>" } por si cambia.
     const base64Image =
       response.data?.result?.image ||
       response.data?.image;
 
     if (!base64Image || typeof base64Image !== 'string') {
-      console.error('   ❌ Respuesta inesperada de Cloudflare:', JSON.stringify(response.data).slice(0, 200));
-      throw new Error('La API no devolvió una imagen válida');
+      console.error('   âŒ Respuesta inesperada de Cloudflare:', JSON.stringify(response.data).slice(0, 200));
+      throw new Error('La API no devolviÃ³ una imagen vÃ¡lida');
     }
 
     // Convertir Base64 a Buffer binario
     const buffer = Buffer.from(base64Image, 'base64');
 
     if (!buffer || buffer.length < 500) {
-      throw new Error('La imagen decodificada es demasiado pequeña o está vacía');
+      throw new Error('La imagen decodificada es demasiado pequeÃ±a o estÃ¡ vacÃ­a');
     }
 
-    console.log(`   ✅ Imagen generada (${(buffer.length / 1024).toFixed(1)} KB)`);
+    console.log(`   âœ… Imagen generada (${(buffer.length / 1024).toFixed(1)} KB)`);
     return buffer;
   } catch (err) {
     const msg = err?.response?.status
       ? `HTTP ${err.response.status} - ${err.response.statusText}`
       : err.message;
-    console.error(`   ❌ Error generando imagen con Cloudflare: ${msg}`);
+    console.error(`   âŒ Error generando imagen con Cloudflare: ${msg}`);
 
     if (err.response?.data) {
       try {
@@ -95,8 +95,8 @@ export async function generateAIImage(prompt) {
 }
 
 /**
- * Generador de gráficos SVG simples (comando !imagen).
- * Se mantiene como fallback cuando no se necesita una imagen artística.
+ * Generador de grÃ¡ficos SVG simples (comando !imagen).
+ * Se mantiene como fallback cuando no se necesita una imagen artÃ­stica.
  */
 export async function generateTextImage(title, content) {
   const width = 800;
@@ -105,7 +105,7 @@ export async function generateTextImage(title, content) {
   const titleSize = 32;
   const bodySize = 18;
 
-  const cleanTitle = String(title || 'Sin título').slice(0, 80);
+  const cleanTitle = String(title || 'Sin tÃ­tulo').slice(0, 80);
   const cleanContent = String(content || '').slice(0, 2000);
 
   const words = cleanContent.split(/\s+/);

@@ -1,31 +1,37 @@
-# Dependencias
+﻿Dependencias
 node_modules/
 
-# Variables de entorno
+Variables de entorno
 .env
 .env.local
 .env.render
 
-# 🔐 Sesión legacy de Baileys (ya no se usa, todo vive en Supabase)
+🔐 Sesión legacy de Baileys (ya no se usa, todo vive en Supabase)
 data/session/
 
-# 🗑️ Temporales del bot (TTS/STT y documentos)
+🗑️ Temporales del bot (TTS/STT y documentos)
 data/tmp/
 data/*.bak
 
-# Sistema
+Sistema
 .DS_Store
 Thumbs.db
 
-# Editor
+Editor
 .vscode/
 .idea/
 
-# Logs
+Logs
 logs/
 *.log
 
-# Build / dist
+Build / dist
 dist/
 build/
 *.tmp
+
+Archivos de debug/backups locales
+index.js.bak
+diagnostico.mjs
+test_connection.mjs
+bot-output.log

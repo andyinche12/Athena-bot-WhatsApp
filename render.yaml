@@ -1,4 +1,4 @@
-services:
+﻿services:
   - type: web
     name: athena-bot-whatsapp
     env: node
@@ -8,6 +8,10 @@ services:
     startCommand: npm start
     healthCheckPath: /health
     envVars:
+      - key: NODE_OPTIONS
+        value: "--max-old-space-size=400"
+      - key: UV_THREADPOOL_SIZE
+        value: "2"
       - key: NODE_ENV
         value: production
       - key: TZ
