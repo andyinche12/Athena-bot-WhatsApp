@@ -9,9 +9,9 @@
     healthCheckPath: /health
     envVars:
       - key: NODE_OPTIONS
-        value: "--max-old-space-size=400"
+        value: "--max-old-space-size=460"
       - key: UV_THREADPOOL_SIZE
-        value: "2"
+        value: "4"
       - key: NODE_ENV
         value: production
       - key: TZ
@@ -25,6 +25,10 @@
       - key: OPENROUTER_API_KEY
         sync: false
       - key: NVIDIA_API_KEY
+        sync: false
+      - key: CLOUDFLARE_ACCOUNT_ID
+        sync: false
+      - key: CLOUDFLARE_API_TOKEN
         sync: false
       - key: DEFAULT_LLM_PROVIDER
         value: groq

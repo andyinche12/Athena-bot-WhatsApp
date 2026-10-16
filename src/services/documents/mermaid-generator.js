@@ -1,139 +1,176 @@
 /**
- * Mermaid Generator v2 — Genera diagramas ricos con jerarquía y estilos.
+ * Mermaid Generator v3.2 — flowchart TD + límite de tamaño + retry
  *
- * Mejoras v2:
- *   - System prompt más exigente: exige 3+ niveles de jerarquía
- *   - Hasta 25 nodos con subcategorías
- *   - Estilos con colores por nivel
- *   - Elige automáticamente mindmap vs flowchart según el caso
- *   - Mayor resolución en mermaid.ink
+ * Fix v3.2:
+ *   - v3.1: eliminado mindmap (rompía sintaxis)
+ *   - v3.2: límite de 7000 chars (mermaid.ink rechaza URLs muy largas)
+ *          + reduce maxTokens a 2500
+ *          + si excede, se trunca al último classDef completo
  */
 
 import axios from 'axios';
 import { askLLM } from '../llm/router.js';
 
 const MERMAID_INK_BASE = 'https://mermaid.ink/img/';
+const MAX_CODE_CHARS = 6500; // límite seguro antes de base64
 
-const SYSTEM_PROMPT = `Eres un experto en Mermaid.js especializado en crear MAPAS CONCEPTUALES RICOS Y PROFUNDOS para estudiantes universitarios.
+const SYSTEM_PROMPT = `Eres un experto en Mermaid.js que genera MAPAS CONCEPTUALES PROFUNDOS para estudiantes universitarios peruanos.
 
-Tu tarea: convertir una descripción en un diagrama Mermaid DETALLADO, con jerarquía real de al menos 3 niveles, no una simple lista radial.
+## REGLA CRÍTICA
 
-## Reglas de formato
+SIEMPRE usa \`flowchart TD\`. NUNCA uses \`mindmap\`, \`graph\`, ni \`graph TD\`.
+Razón: \`mindmap\` NO permite node IDs (N0[Texto]) ni classDef, y se rompe al renderizar.
 
-1. Responde SOLO con el código Mermaid. Sin \`\`\`mermaid, sin \`\`\`, sin explicaciones.
-2. Etiquetas en ESPAÑOL, claras y específicas (2-6 palabras).
-3. NO uses paréntesis, comillas dobles ni caracteres especiales dentro de las etiquetas de nodos. Para evitar errores, evita también tildes en las etiquetas (usa "razon" en vez de "razón", "formula" en vez de "fórmula").
-4. Para flowchart: \`A[Texto del nodo]\` para rectángulos, \`A((Texto))\` para círculos.
+## REGLAS DE FORMATO
 
-## Reglas de ESTRUCTURA (lo más importante)
+1. Responde SOLO con el código Mermaid. Sin \`\`\`mermaid, sin \`\`\`, sin texto extra.
+2. Etiquetas en ESPAÑOL (2-5 palabras), SIN tildes, SIN paréntesis, SIN comillas.
+3. Cada nodo se ve así: \`A[Texto]:::nivelN\`
 
-Un buen mapa conceptual tiene:
-- 1 nodo central (el tema principal)
-- 4-6 ramas principales (categorías)
-- Cada rama con 2-4 sub-nodos (detalles concretos)
-- Algunos sub-nodos con nodos terciarios (ejemplos, fórmulas, clasificaciones)
-- TOTAL: entre 18 y 25 nodos
+## ESTRUCTURA
 
-NUNCA hagas un diagrama plano con solo flechas del centro. SIEMPRE profundiza.
+- 1 nodo raíz (nivel1)
+- 4-5 ramas principales (nivel2)
+- Cada rama con 3-4 sub-nodos (nivel3)
+- Algunos nivel3 con 1-2 hijos (nivel4)
+- TOTAL: 30-45 nodos (no más)
+- 4 niveles de profundidad
 
-## Tipos de diagrama (elige según la petición)
+⚠️ IMPORTANTE: NO generes más de 45 nodos. Mapas muy grandes no renderizan.
 
-- "mapa conceptual" o "mapa mental" → \`mindmap\` con jerarquía natural por indentación
-- "diagrama de flujo" o "proceso" o "flujograma" → \`flowchart TD\` con pasos secuenciales
-- "organigrama" → \`flowchart TD\` con estructura jerárquica
-- "cuadro sinóptico" → \`flowchart LR\` con llaves laterales
-
-## ESTILOS OBLIGATORIOS
-
-Antes de la definición del diagrama, incluye esta línea para colorear por nivel:
+## EJEMPLO COMPLETO (imita este formato EXACTO)
 
 %%{init: {'theme':'base', 'themeVariables': {'primaryColor':'#e3f2fd','primaryTextColor':'#0d47a1','primaryBorderColor':'#1976d2','lineColor':'#546e7a','fontSize':'16px'}}}%%
-
-Y al final del diagrama, agrega estilos por nivel:
-
-classDef nivel1 fill:#0d47a1,stroke:#062b63,color:#ffffff,font-weight:bold
-classDef nivel2 fill:#1976d2,stroke:#0d47a1,color:#ffffff
-classDef nivel3 fill:#bbdefb,stroke:#1976d2,color:#0d47a1
-classDef nivel4 fill:#e3f2fd,stroke:#90caf9,color:#0d47a1
-
-Luego aplica las clases a los nodos:
-class A nivel1
-class B,C,D,E nivel2
-class B1,B2,C1,C2 nivel3
-class B1a,C1a nivel4
-
-## Ejemplo de ALTA CALIDAD (imita este nivel de detalle)
-
-%%{init: {'theme':'base', 'themeVariables': {'primaryColor':'#e3f2fd','lineColor':'#546e7a','fontSize':'16px'}}}%%
 flowchart TD
-    RAZON[RAZON DE SOLVENCIA]:::nivel1
-    RAZON --> CONCEPTO[Concepto]:::nivel2
-    RAZON --> FORMULA[Formula]:::nivel2
-    RAZON --> INTERP[Interpretacion]:::nivel2
-    RAZON --> IMPORT[Importancia]:::nivel2
+    NIC16[NIC 16 PROPIEDAD PLANTA EQUIPO]:::nivel1
 
-    CONCEPTO --> C1[Capacidad de pago]:::nivel3
-    CONCEPTO --> C2[Respaldo de activos]:::nivel3
-    CONCEPTO --> C3[Indicador de riesgo]:::nivel3
+    NIC16 --> ALC[Alcance]:::nivel2
+    NIC16 --> REC[Reconocimiento]:::nivel2
+    NIC16 --> MED[Medicion]:::nivel2
+    NIC16 --> DEP[Depreciacion]:::nivel2
 
-    FORMULA --> F1[Activo Total / Pasivo Total]:::nivel3
-    FORMULA --> F2[Datos del Estado de Situacion Financiera]:::nivel3
+    ALC --> A1[Entidades publicas]:::nivel3
+    ALC --> A2[Entidades privadas]:::nivel3
+    A1 --> A1a[Gobiernos locales]:::nivel4
+    A2 --> A2a[Empresas comerciales]:::nivel4
 
-    INTERP --> I1[Mayor a 1 = Solvente]:::nivel3
-    INTERP --> I2[Menor a 1 = Riesgo]:::nivel3
-    I1 --> I1a[Ejemplo: 2.05]:::nivel4
-    I2 --> I2a[Ejemplo: 0.85]:::nivel4
+    REC --> R1[Al costo inicial]:::nivel3
+    REC --> R2[Incluye flete]:::nivel3
+    R1 --> R1a[Precio de compra]:::nivel4
+    R2 --> R2a[Instalacion]:::nivel4
 
-    IMPORT --> IM1[Decisiones de credito]:::nivel3
-    IMPORT --> IM2[Analisis para inversionistas]:::nivel3
+    MED --> M1[Modelo costo]:::nivel3
+    MED --> M2[Modelo revaluacion]:::nivel3
+    M1 --> M1a[Costo menos depreciacion]:::nivel4
+    M2 --> M2a[Valor razonable]:::nivel4
 
-    classDef nivel1 fill:#0d47a1,stroke:#062b63,color:#ffffff,font-weight:bold
-    classDef nivel2 fill:#1976d2,stroke:#0d47a1,color:#ffffff
-    classDef nivel3 fill:#bbdefb,stroke:#1976d2,color:#0d47a1
-    classDef nivel4 fill:#e3f2fd,stroke:#90caf9,color:#0d47a1
+    DEP --> D1[Metodo lineal]:::nivel3
+    DEP --> D2[Saldo decreciente]:::nivel3
+    D1 --> D1a[Vida util uniforme]:::nivel4
+    D2 --> D2a[Mayor al inicio]:::nivel4
 
-## Regla final
+    classDef nivel1 fill:#0d47a1,stroke:#062b63,color:#ffffff,font-weight:bold,font-size:18px
+    classDef nivel2 fill:#1976d2,stroke:#0d47a1,color:#ffffff,font-size:15px
+    classDef nivel3 fill:#bbdefb,stroke:#1976d2,color:#0d47a1,font-size:13px
+    classDef nivel4 fill:#e3f2fd,stroke:#90caf9,color:#0d47a1,font-size:11px
 
-Si el tema es simple, igual profundiza. Es mejor un mapa con detalle que uno plano. Si tienes dudas sobre la sintaxis Mermaid, simplifica la estructura PERO mantén la jerarquía de 3 niveles y los estilos.`;
+## VALIDACIÓN
 
-/**
- * Convierte la petición del usuario en código Mermaid usando el LLM.
- */
-async function generateMermaidSyntax(userRequest, contextText) {
+Antes de responder, verifica:
+- ¿Empieza con flowchart TD? ✅
+- ¿Tiene entre 30 y 45 nodos? ✅
+- ¿Tiene al menos 3 niveles? ✅
+- ¿Termina con las 4 líneas classDef? ✅
+
+Si algo falla, ARREGLA antes de responder.`;
+
+function validateMermaid(code) {
+  if (!code || code.length < 150) return { ok: false, reason: 'muy corto' };
+
+  if (!/flowchart\s+TD/i.test(code)) {
+    return { ok: false, reason: 'no es flowchart TD' };
+  }
+
+  if (/^\s*mindmap/im.test(code)) {
+    return { ok: false, reason: 'usa mindmap (prohibido)' };
+  }
+
+  const nodeCount = (code.match(/:::nivel\d/g) || []).length;
+  const levels = new Set((code.match(/nivel\d/g) || [])).size;
+
+  if (nodeCount < 15) return { ok: false, reason: `solo ${nodeCount} nodos` };
+  if (levels < 3) return { ok: false, reason: `solo ${levels} niveles` };
+
+  return { ok: true, nodeCount, levels };
+}
+
+/* ============================================================
+ *  Truncar código si es demasiado largo (evita 414)
+ *  Corta en el último nodo completo antes del límite y
+ *  siempre preserva los classDef finales.
+ * ============================================================ */
+function truncateCode(code) {
+  if (code.length <= MAX_CODE_CHARS) return code;
+
+  console.log(`   ✂️  Código muy largo (${code.length} chars), truncando a ${MAX_CODE_CHARS}...`);
+
+  // Extraer las líneas classDef (siempre van al final)
+  const classDefLines = code.match(/^\s*classDef\s+nivel\d+.*$/gm) || [];
+  const initLine = (code.match(/^%%\{init.*%%$/m) || [''])[0];
+  const firstLine = 'flowchart TD';
+
+  // Cortar el cuerpo antes del primer classDef
+  const bodyEnd = code.search(/\n\s*classDef\s+nivel\d+/);
+  let body = bodyEnd > 0 ? code.slice(0, bodyEnd) : code;
+
+  // Si el body ya es corto, dejarlo
+  if (body.length > MAX_CODE_CHARS - 800) {
+    // Truncar por líneas completas (no cortar a mitad de un nodo)
+    const lines = body.split('\n');
+    let acc = lines[0] + '\n' + lines[1] + '\n';
+    for (let i = 2; i < lines.length; i++) {
+      if (acc.length + lines[i].length > MAX_CODE_CHARS - 800) break;
+      acc += lines[i] + '\n';
+    }
+    body = acc;
+  }
+
+  return [body.trim(), ...classDefLines].join('\n');
+}
+
+async function generateMermaidSyntax(userRequest, contextText, provider = 'groq') {
   const userContent = contextText
-    ? `Genera un diagrama Mermaid COMPLETO Y DETALLADO para: "${userRequest}"\n\nBasate en el siguiente contenido del documento:\n\n${contextText.slice(0, 4000)}`
-    : `Genera un diagrama Mermaid COMPLETO Y DETALLADO para: "${userRequest}"`;
+    ? `Genera un MAPA CONCEPTUAL (flowchart TD) para: "${userRequest}"
+
+Basate en este contenido:
+
+${contextText.slice(0, 3500)}
+
+Recuerda: flowchart TD, ENTRE 30 y 45 nodos, MINIMO 3 niveles.`
+    : `Genera un MAPA CONCEPTUAL (flowchart TD) para: "${userRequest}"
+
+Recuerda: flowchart TD, ENTRE 30 y 45 nodos, MINIMO 3 niveles. NO más de 45 nodos.`;
 
   const messages = [
     { role: 'system', content: SYSTEM_PROMPT },
     { role: 'user', content: userContent },
   ];
 
-  console.log(`   🧠 Generando sintaxis Mermaid con el LLM...`);
+  console.log(`   🧠 Generando sintaxis Mermaid (flowchart TD) con ${provider}...`);
   const result = await askLLM(messages, {
-    preferred: 'groq',
-    maxTokens: 2500,
-    temperature: 0.4,
+    preferred: provider,
+    maxTokens: 2600,  // ← reducido de 4000 a 2600
+    temperature: 0.35,
   });
 
-  // Limpiar la respuesta
   let code = result.text.trim();
-  code = code.replace(/^```mermaid\s*/i, '');
-  code = code.replace(/^```\s*/, '');
-  code = code.replace(/```\s*$/, '');
-  code = code.trim();
+  code = code.replace(/^```mermaid\s*/i, '').replace(/^```\s*/, '').replace(/```\s*$/, '').trim();
+  code = truncateCode(code);
 
-  if (!code || code.length < 20) {
-    throw new Error('El LLM no devolvió una sintaxis Mermaid válida');
-  }
-
-  console.log(`   ✅ Sintaxis generada (${code.length} chars, ${result.provider})`);
-  return code;
+  console.log(`   📊 Sintaxis: ${code.length} chars, ${result.provider}`);
+  return { code, provider: result.provider };
 }
 
-/**
- * Renderiza código Mermaid a PNG usando mermaid.ink
- */
 async function renderMermaidToImage(mermaidCode) {
   const utf8Bytes = Buffer.from(mermaidCode, 'utf8');
   const base64 = utf8Bytes
@@ -142,57 +179,78 @@ async function renderMermaidToImage(mermaidCode) {
     .replace(/\//g, '_')
     .replace(/=/g, '');
 
-  // Más ancho y mayor escala para diagramas con jerarquía profunda
   const params = new URLSearchParams({
     type: 'png',
     bgColor: 'FFFFFF',
-    width: '2000',
+    width: '2400',
     scale: '2',
   });
 
   const url = `${MERMAID_INK_BASE}${base64}?${params.toString()}`;
-
-  console.log(`   🎨 Renderizando diagrama con mermaid.ink...`);
-  console.log(`      URL: ${url.slice(0, 120)}...`);
+  console.log(`   🎨 Renderizando (URL: ${url.length} chars)...`);
 
   const response = await axios.get(url, {
     responseType: 'arraybuffer',
-    timeout: 30000,
+    timeout: 40000,
     headers: { 'User-Agent': 'AthenaBot/1.0' },
   });
 
   const buffer = Buffer.from(response.data);
-
   if (!buffer || buffer.length < 500) {
-    throw new Error('El diagrama renderizado está vacío o es demasiado pequeño');
+    throw new Error('Diagrama vacío');
   }
 
-  console.log(`   ✅ Diagrama renderizado (${(buffer.length / 1024).toFixed(1)} KB)`);
+  console.log(`   ✅ Render OK (${(buffer.length / 1024).toFixed(1)} KB)`);
   return buffer;
 }
 
-/**
- * Función principal.
- *
- * @param {string} userRequest - Petición del usuario
- * @param {string} contextText - (Opcional) Texto del documento de contexto
- * @returns {Promise<{buffer: Buffer, code: string}>}
- */
 export async function generateMermaidDiagram(userRequest, contextText = '') {
   if (!userRequest || !userRequest.trim()) {
     throw new Error('La petición está vacía');
   }
 
-  const code = await generateMermaidSyntax(userRequest, contextText);
+  let bestCode = null;
+  let bestStats = { ok: false, nodeCount: 0, levels: 0 };
 
   try {
-    const buffer = await renderMermaidToImage(code);
-    return { buffer, code };
+    const { code } = await generateMermaidSyntax(userRequest, contextText, 'groq');
+    const v = validateMermaid(code);
+    console.log(`   🔍 Validación: ${v.ok ? '✅' : '⚠️'} ${v.reason || ''} (${v.nodeCount} nodos, ${v.levels} niveles)`);
+    bestCode = code;
+    bestStats = v;
   } catch (err) {
-    console.error(`   ❌ Error renderizando Mermaid: ${err.message}`);
-    console.error(`   Sintaxis problemática:\n${code}`);
-    throw new Error(
-      `No se pudo renderizar el diagrama. Sintaxis generada:\n${code.slice(0, 300)}`
-    );
+    console.warn('   ⚠️  Groq falló:', err.message);
+  }
+
+  if (!bestStats.ok) {
+    try {
+      console.log(`   🔄 Reintentando con NVIDIA (${bestStats.reason || 'pobre'})...`);
+      const { code } = await generateMermaidSyntax(userRequest, contextText, 'nvidia');
+      const v = validateMermaid(code);
+      console.log(`   🔍 Validación NVIDIA: ${v.ok ? '✅' : '⚠️'} (${v.nodeCount} nodos, ${v.levels} niveles)`);
+      if (v.ok || v.nodeCount > bestStats.nodeCount) {
+        bestCode = code;
+        bestStats = v;
+      }
+    } catch (err) {
+      console.warn('   ⚠️  NVIDIA falló:', err.message);
+    }
+  }
+
+  if (!bestCode) throw new Error('No se pudo generar código Mermaid');
+
+  const finalCheck = validateMermaid(bestCode);
+  if (!finalCheck.ok) {
+    throw new Error(`Código inválido: ${finalCheck.reason}`);
+  }
+
+  console.log(`   📊 Final: ${bestStats.nodeCount} nodos, ${bestStats.levels} niveles, ${bestCode.length} chars`);
+
+  try {
+    const buffer = await renderMermaidToImage(bestCode);
+    return { buffer, code: bestCode };
+  } catch (err) {
+    console.error(`   ❌ Error render: ${err.message}`);
+    throw new Error(`No se pudo renderizar. Intenta con otro tema.`);
   }
 }

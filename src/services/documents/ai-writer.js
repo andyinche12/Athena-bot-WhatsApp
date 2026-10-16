@@ -1,207 +1,238 @@
 /**
- * AI Writer — usa el LLM para redactar el contenido de documentos
- * antes de convertirlos en Word/PDF/Excel/PPT.
+ * Mermaid Generator v3.1 — Diagramas SIEMPRE flowchart TD (nunca mindmap).
  *
- * Cadena de intentos: Groq → NVIDIA → OpenRouter
- * (Groq es 15x más rápido; NVIDIA solo como fallback por si Groq falla)
- *
- * Soporta feedback opcional para regenerar con instrucciones del usuario.
+ * Fix v3.1:
+ *   - Eliminado "mindmap" del prompt (rompía la sintaxis)
+ *   - SIEMPRE flowchart TD con node IDs + classDef
+ *   - Validación estricta antes de renderizar
  */
 
+import axios from 'axios';
 import { askLLM } from '../llm/router.js';
 
-/* ============================================================
- *  Prompts por tipo de documento
- * ============================================================ */
+const MERMAID_INK_BASE = 'https://mermaid.ink/img/';
 
-const PROMPTS = {
-  word: (tema) => `Eres un redactor académico profesional. Redacta un INFORME COMPLETO sobre: "${tema}".
+const SYSTEM_PROMPT = `Eres un experto en Mermaid.js que genera MAPAS MENTALES Y CONCEPTUALES PROFUNDOS para estudiantes universitarios peruanos.
 
-Responde SOLO con un JSON válido (sin markdown, sin texto extra) con esta estructura exacta:
+## REGLA CRÍTICA (LA MÁS IMPORTANTE)
 
-{
-  "title": "Título formal del informe",
-  "sections": [
-    { "heading": "1. Introducción", "paragraphs": ["Párrafo 1...", "Párrafo 2..."] },
-    { "heading": "2. Marco Teórico", "paragraphs": ["..."] },
-    { "heading": "3. Desarrollo", "paragraphs": ["..."] },
-    { "heading": "4. Conclusiones", "paragraphs": ["..."] }
-  ]
-}
+SIEMPRE usa \`flowchart TD\`. NUNCA uses \`mindmap\`, \`graph\`, ni \`graph TD\`.
+Razón: \`mindmap\` NO permite node IDs (N0[Texto]) ni classDef. Se rompe al renderizar.
+\`flowchart TD\` sí permite todo lo que necesitamos.
 
-Reglas:
-- Español formal y técnico
-- 3-5 secciones
-- 2-4 párrafos por sección
-- Mínimo 150 palabras por sección
-- Contexto peruano, contable/financiero
-- Cita normativa peruana si aplica (NIA, NIIF, SUNAT, SBS)`,
+## REGLAS DE FORMATO
 
-  pdf: (tema) => `Eres un redactor académico. Crea un DOCUMENTO PDF FORMAL sobre: "${tema}".
+1. Responde SOLO con el código Mermaid. Sin \`\`\`mermaid, sin \`\`\`, sin texto antes ni después.
+2. Etiquetas en ESPAÑOL, claras (2-5 palabras).
+3. SIN tildes dentro de etiquetas (usa "razon" no "razón").
+4. SIN paréntesis, comillas ni caracteres especiales dentro de las etiquetas.
+5. Cada nodo se ve así: \`A[Texto del nodo]:::nivelN\`
 
-Responde SOLO con JSON válido:
-{
-  "title": "Título",
-  "sections": [
-    { "heading": "Sección", "paragraphs": ["Párrafo 1...", "Párrafo 2..."] }
-  ]
-}
+## ESTRUCTURA OBLIGATORIA
 
-Reglas: formal, técnico, contexto peruano, 3-5 secciones, párrafos sustanciosos.`,
+- Primera línea: \`flowchart TD\`
+- 1 nodo raíz con la clase nivel1
+- 4-6 ramas principales (nivel2)
+- Cada rama con 3-5 sub-nodos (nivel3)
+- Algunos nivel3 con 1-2 nodos hijos (nivel4)
+- TOTAL: 30-45 nodos
+- 4 NIVELES de profundidad mínimos
 
-  excel: (tema) => `Eres un analista de datos. Diseña una TABLA EXCEL sobre: "${tema}".
+## EJEMPLO COMPLETO (imita EXACTAMENTE este formato)
 
-Responde SOLO con JSON válido:
-{
-  "title": "Título de la tabla",
-  "headers": ["Columna 1", "Columna 2", "Columna 3"],
-  "rows": [
-    ["dato", "dato", "dato"],
-    ["dato", "dato", "dato"]
-  ]
-}
+%%{init: {'theme':'base', 'themeVariables': {'primaryColor':'#e3f2fd','primaryTextColor':'#0d47a1','primaryBorderColor':'#1976d2','lineColor':'#546e7a','fontSize':'16px'}}}%%
+flowchart TD
+    ENCAJE[ENCAJE BANCARIO]:::nivel1
 
-Reglas:
-- Encabezados claros
-- 8-15 filas de datos realistas
-- Contexto contable/financiero peruano
-- Números con sentido (montos, porcentajes, fechas)
-- Si es comparativo, incluir totales al final`,
+    ENCAJE --> DEF[Definicion]:::nivel2
+    ENCAJE --> TIPOS[Tipos]:::nivel2
+    ENCAJE --> BASE[Base Legal]:::nivel2
+    ENCAJE --> CALC[Calculo]:::nivel2
 
-  ppt: (tema) => `Eres un diseñador de presentaciones. Crea SLIDES sobre: "${tema}".
+    DEF --> D1[Reserva obligatoria]:::nivel3
+    DEF --> D2[Deposito en BCRP]:::nivel3
+    DEF --> D3[Porcentaje de depositos]:::nivel3
+    D1 --> D1a[No se puede prestar]:::nivel4
+    D1 --> D1b[Genera liquidez]:::nivel4
+    D3 --> D3a[Minimo 4%]:::nivel4
 
-Responde SOLO con JSON válido:
-{
-  "title": "Título de la presentación",
-  "slides": [
-    { "title": "Slide 1", "bullets": ["Punto 1", "Punto 2", "Punto 3"] },
-    { "title": "Slide 2", "bullets": ["..."] }
-  ]
-}
+    TIPOS --> T1[Legal o efectivo]:::nivel3
+    TIPOS --> T2[Excedente]:::nivel3
+    T1 --> T1a[En cuenta BCRP]:::nivel4
+    T2 --> T2a[Deposito adicional]:::nivel4
 
-Reglas:
-- 6-10 slides
-- 3-5 bullets por slide
-- Bullets concisos (máx 15 palabras cada uno)
-- Estructura: intro, desarrollo, conclusión
-- Contexto peruano contable`,
-};
+    BASE --> B1[Ley 26702]:::nivel3
+    BASE --> B2[Circular BCRP]:::nivel3
+    B1 --> B1a[Articulo 162]:::nivel4
 
-/* ============================================================
- *  Parseo robusto de JSON
- *  Los modelos Nemotron emiten <think>...</think> antes del JSON.
- *  Los limpiamos antes de parsear.
- * ============================================================ */
-function parseJSON(text) {
-  let clean = (text || '').trim();
+    CALC --> C1[Porcentaje por tipo]:::nivel3
+    CALC --> C2[Base de calculo]:::nivel3
+    C1 --> C1a[Depositos vista]:::nivel4
+    C2 --> C2a[Promedio diario]:::nivel4
 
-  // 1. Quitar bloques de razonamiento (Nemotron, DeepSeek-R, etc.)
-  clean = clean.replace(/<think>[\s\S]*?<\/think>/gi, '');
-  clean = clean.replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '');
-  clean = clean.replace(/<reflection>[\s\S]*?<\/reflection>/gi, '');
+    classDef nivel1 fill:#0d47a1,stroke:#062b63,color:#ffffff,font-weight:bold,font-size:18px
+    classDef nivel2 fill:#1976d2,stroke:#0d47a1,color:#ffffff,font-size:15px
+    classDef nivel3 fill:#bbdefb,stroke:#1976d2,color:#0d47a1,font-size:13px
+    classDef nivel4 fill:#e3f2fd,stroke:#90caf9,color:#0d47a1,font-size:11px
 
-  // 2. Quitar bloques markdown ```json ... ```
-  clean = clean.replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/```$/, '');
-  clean = clean.trim();
+## CLASES OBLIGATORIAS AL FINAL
 
-  // 3. Ubicar el primer { y el último }
-  const start = clean.indexOf('{');
-  const end = clean.lastIndexOf('}');
-  if (start === -1 || end === -1) {
-    console.error('   ⚠️  LLM sin JSON. Primeros 300 chars:', clean.slice(0, 300));
-    throw new Error('El LLM no devolvió JSON válido');
+classDef nivel1 fill:#0d47a1,stroke:#062b63,color:#ffffff,font-weight:bold,font-size:18px
+classDef nivel2 fill:#1976d2,stroke:#0d47a1,color:#ffffff,font-size:15px
+classDef nivel3 fill:#bbdefb,stroke:#1976d2,color:#0d47a1,font-size:13px
+classDef nivel4 fill:#e3f2fd,stroke:#90caf9,color:#0d47a1,font-size:11px
+
+## REGLA FINAL
+
+Si tienes dudas de sintaxis, SIMPLIFICA las etiquetas, pero NUNCA cambies flowchart TD.`;
+
+function validateMermaid(code) {
+  if (!code || code.length < 150) return { ok: false, reason: 'muy corto' };
+
+  // Debe empezar con %%{init o flowchart
+  if (!/flowchart\s+TD/i.test(code)) {
+    return { ok: false, reason: 'no es flowchart TD' };
   }
 
-  const jsonStr = clean.slice(start, end + 1);
-
-  try {
-    return JSON.parse(jsonStr);
-  } catch (err) {
-    console.error('   ⚠️  JSON malformado. Primeros 300 chars:', jsonStr.slice(0, 300));
-    throw new Error(`JSON malformado: ${err.message}`);
+  // No debe contener mindmap
+  if (/^\s*mindmap/im.test(code)) {
+    return { ok: false, reason: 'usa mindmap (prohibido)' };
   }
+
+  const nodeCount = (code.match(/:::nivel\d/g) || []).length;
+  const levels = new Set((code.match(/nivel\d/g) || [])).size;
+
+  if (nodeCount < 15) return { ok: false, reason: `solo ${nodeCount} nodos` };
+  if (levels < 3) return { ok: false, reason: `solo ${levels} niveles` };
+
+  return { ok: true, nodeCount, levels };
 }
 
-/* ============================================================
- *  Writer principal
- *  Cadena: Groq → NVIDIA → OpenRouter
- *
- *  Retorna: { data, provider, model }
- *    - data: el JSON parseado (title + sections/rows/slides)
- *    - provider: 'groq' | 'nvidia' | 'openrouter'
- *    - model: string (el modelo específico que respondió)
- *
- *  @param {string} tipo - 'word' | 'pdf' | 'excel' | 'ppt'
- *  @param {string} tema - el tema del documento
- *  @param {string|null} feedback - instrucciones opcionales de mejora
- * ============================================================ */
-export async function aiWrite(tipo, tema, feedback = null) {
-  const promptFn = PROMPTS[tipo];
-  if (!promptFn) throw new Error(`Tipo no soportado: ${tipo}`);
+async function generateMermaidSyntax(userRequest, contextText, provider = 'groq') {
+  const userContent = contextText
+    ? `Genera un diagrama tipo MAPA CONCEPTUAL (flowchart TD) EXCEPCIONALMENTE DETALLADO para: "${userRequest}"
 
-  const basePrompt = promptFn(tema);
-  const userPrompt = feedback
-    ? `${basePrompt}\n\n⚠️ INSTRUCCIONES ADICIONALES DEL USUARIO (prioridad alta):\n"${feedback}"\n\nAplica esas instrucciones al contenido, respetando la estructura JSON solicitada.`
-    : basePrompt;
+Basate en este contenido:
+
+${contextText.slice(0, 5000)}
+
+Recuerda: flowchart TD, MINIMO 30 nodos, MINIMO 4 niveles, estilos classDef completos.`
+    : `Genera un diagrama tipo MAPA CONCEPTUAL (flowchart TD) EXCEPCIONALMENTE DETALLADO para: "${userRequest}"
+
+Recuerda: flowchart TD, MINIMO 30 nodos, MINIMO 4 niveles, estilos classDef completos.`;
 
   const messages = [
-    {
-      role: 'system',
-      content:
-        'Eres un asistente experto en redacción técnica contable peruana. ' +
-        'Respondes SIEMPRE en JSON válido, sin explicaciones, sin markdown, ' +
-        'sin bloques <think>, sin texto antes ni después del JSON.',
-    },
-    { role: 'user', content: userPrompt },
+    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'user', content: userContent },
   ];
 
-  // ---------- 1º intento: Groq (rápido y confiable) ----------
+  console.log(`   🧠 Generando sintaxis Mermaid (flowchart TD) con ${provider}...`);
+  const result = await askLLM(messages, {
+    preferred: provider,
+    maxTokens: 4000,
+    temperature: 0.35,
+  });
+
+  let code = result.text.trim();
+  code = code.replace(/^```mermaid\s*/i, '').replace(/^```\s*/, '').replace(/```\s*$/, '').trim();
+
+  console.log(`   📊 Sintaxis generada: ${code.length} chars, ${result.provider}`);
+  return { code, provider: result.provider };
+}
+
+async function renderMermaidToImage(mermaidCode) {
+  const utf8Bytes = Buffer.from(mermaidCode, 'utf8');
+  const base64 = utf8Bytes
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=/g, '');
+
+  const params = new URLSearchParams({
+    type: 'png',
+    bgColor: 'FFFFFF',
+    width: '2400',
+    scale: '2',
+  });
+
+  const url = `${MERMAID_INK_BASE}${base64}?${params.toString()}`;
+
+  console.log(`   🎨 Renderizando con mermaid.ink...`);
+  const response = await axios.get(url, {
+    responseType: 'arraybuffer',
+    timeout: 40000,
+    headers: { 'User-Agent': 'AthenaBot/1.0' },
+  });
+
+  const buffer = Buffer.from(response.data);
+  if (!buffer || buffer.length < 500) {
+    throw new Error('El diagrama renderizado está vacío');
+  }
+
+  console.log(`   ✅ Render OK (${(buffer.length / 1024).toFixed(1)} KB)`);
+  return buffer;
+}
+
+export async function generateMermaidDiagram(userRequest, contextText = '') {
+  if (!userRequest || !userRequest.trim()) {
+    throw new Error('La petición está vacía');
+  }
+
+  let bestCode = null;
+  let bestStats = { ok: false, nodeCount: 0, levels: 0 };
+
+  // ---- Intento 1: Groq ----
   try {
-    const r1 = await askLLM(messages, {
-      preferred: 'groq',
-      jsonMode: true,
-      maxTokens: 4000,
-      temperature: 0.5,
-    });
-    console.log(`   🧠 Redactado por ${r1.provider} (${r1.model})`);
-    return {
-      data: parseJSON(r1.text),
-      provider: r1.provider,
-      model: r1.model,
-    };
+    const { code } = await generateMermaidSyntax(userRequest, contextText, 'groq');
+    const v = validateMermaid(code);
+    console.log(`   🔍 Validación: ${v.ok ? '✅' : '⚠️'} ${v.reason || ''} (${v.nodeCount} nodos, ${v.levels} niveles)`);
+
+    if (v.ok) {
+      bestCode = code;
+      bestStats = v;
+    } else {
+      // Guardar de todos modos por si NVIDIA falla
+      bestCode = code;
+      bestStats = v;
+    }
   } catch (err) {
     console.warn('   ⚠️  Groq falló:', err.message);
   }
 
-  // ---------- 2º intento: NVIDIA (calidad superior, más lento) ----------
-  try {
-    const r2 = await askLLM(messages, {
-      preferred: 'nvidia',
-      jsonMode: true,
-      maxTokens: 4000,
-      temperature: 0.5,
-    });
-    console.log(`   🧠 Redactado por ${r2.provider} (${r2.model})`);
-    return {
-      data: parseJSON(r2.text),
-      provider: r2.provider,
-      model: r2.model,
-    };
-  } catch (err) {
-    console.warn('   ⚠️  NVIDIA falló:', err.message);
+  // ---- Intento 2: NVIDIA si el primero fue inválido ----
+  if (!bestStats.ok) {
+    try {
+      console.log(`   🔄 Reintentando con NVIDIA (${bestStats.reason || 'mapa pobre'})...`);
+      const { code } = await generateMermaidSyntax(userRequest, contextText, 'nvidia');
+      const v = validateMermaid(code);
+      console.log(`   🔍 Validación NVIDIA: ${v.ok ? '✅' : '⚠️'} ${v.reason || ''} (${v.nodeCount} nodos, ${v.levels} niveles)`);
+
+      if (v.ok || v.nodeCount > bestStats.nodeCount) {
+        bestCode = code;
+        bestStats = v;
+      }
+    } catch (err) {
+      console.warn('   ⚠️  NVIDIA falló:', err.message);
+    }
   }
 
-  // ---------- 3º intento: OpenRouter (Nemotron Super free) ----------
-  const r3 = await askLLM(messages, {
-    preferred: 'openrouter',
-    jsonMode: true,
-    maxTokens: 4000,
-    temperature: 0.5,
-  });
-  console.log(`   🧠 Redactado por ${r3.provider} (${r3.model})`);
-  return {
-    data: parseJSON(r3.text),
-    provider: r3.provider,
-    model: r3.model,
-  };
+  if (!bestCode) {
+    throw new Error('No se pudo generar el código Mermaid');
+  }
+
+  // Validación final antes de renderizar
+  const finalCheck = validateMermaid(bestCode);
+  if (!finalCheck.ok) {
+    throw new Error(`El código generado no es válido: ${finalCheck.reason}. Reintenta con otro tema.`);
+  }
+
+  console.log(`   📊 Código final: ${bestStats.nodeCount} nodos, ${bestStats.levels} niveles`);
+
+  try {
+    const buffer = await renderMermaidToImage(bestCode);
+    return { buffer, code: bestCode };
+  } catch (err) {
+    console.error(`   ❌ Error render: ${err.message}`);
+    throw new Error(`No se pudo renderizar el diagrama. Intenta con otro tema.`);
+  }
 }

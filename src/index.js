@@ -148,14 +148,20 @@ Habla natural, sin comandos:
 • "hazme un mapa conceptual de ESTE documento" (tras enviar un PDF)
 
 📄 *CREAR DOCUMENTOS CON IA*
-!crear word | tema → Informe .docx formal
-!crear pdf | tema → Documento PDF
-!crear excel | tema → Tabla con datos reales
-!crear ppt | tema → Presentación .pptx
+!crear word <tema> → Informe .docx formal
+!crear pdf <tema> → Documento PDF
+!crear excel <tema> → Tabla con fórmulas reales
+!crear ppt <tema> → Presentación con 3 imágenes IA
 !mejorar <feedback> → Regenerar el último doc
 
+Extras:
+• "sin imágenes" → PPT sin imágenes (~5s)
+• "más imágenes" → PPT con 5 imágenes
+
 Ejemplos:
-!crear word | NIA 500 evidencia de auditoría
+!crear word NIA 500 evidencia de auditoría
+!crear ppt Los negocios más rentables en Perú
+!crear ppt Empresas peruanas sin imágenes
 !mejorar hazlo más corto y agrega ejemplos
 
 📄 *GENERAR MANUAL*
@@ -227,7 +233,8 @@ const HELP_SHORT = `🤖 *Comandos básicos* (escribe !help para ver todos)
 "crea un diagrama de flujo de X" → Mermaid
 
 📄 *Documentos*
-!crear word | NIA 500 → Word con IA
+!crear word NIA 500 → Word con IA
+!crear ppt tema → PPT con 3 imágenes IA
 !mejorar hazlo más corto → Regenerar
 !generar pdf | Título | Contenido
 
@@ -260,9 +267,8 @@ const VOICE_KEYWORDS = [
 
 /* ============================================================
  *  Estado en memoria: último documento generado por usuario
- *  (Permite el comando !mejorar)
  * ============================================================ */
-const lastDocument = new Map(); // jid → { tipo, tema, filename }
+const lastDocument = new Map(); // jid → { tipo, tema, filename, data }
 
 /* ============================================================
  *  Último documento RECIBIDO (para dar contexto a Mermaid)
@@ -271,10 +277,6 @@ const lastReceivedDocument = new Map(); // jid → { text, filename, timestamp }
 
 /* ============================================================
  *  Cola de mensajes por usuario
- *  Garantiza que los mensajes se procesen en ORDEN secuencial
- *  uno tras otro. Esto evita que "hazme un mapa de este documento"
- *  llegue ANTES de que el documento termine de descargarse y
- *  guardarse en lastReceivedDocument.
  * ============================================================ */
 const userQueues = new Map(); // jid → Promise de la cola actual
 
@@ -284,7 +286,6 @@ function enqueueForUser(jid, task) {
     console.error(`❌ Error en cola de ${jid}:`, err.message);
   });
   userQueues.set(jid, next);
-  // Limpieza: cuando termina y es la última de la cadena, borrar la entrada
   next.finally(() => {
     if (userQueues.get(jid) === next) {
       userQueues.delete(jid);
@@ -295,8 +296,6 @@ function enqueueForUser(jid, task) {
 
 /* ============================================================
  *  Detección de intención de diagrama (Mermaid)
- *  Tiene PRIORIDAD sobre la detección de imágenes: si el usuario
- *  pide un "mapa conceptual", queremos Mermaid, no una imagen IA.
  * ============================================================ */
 function detectDiagramIntent(text) {
   if (!text) return false;
@@ -329,6 +328,59 @@ function detectImageIntent(text) {
   }
 
   return { description: text.trim() };
+}
+
+/* ============================================================
+ *  Helper: genera todas las imágenes IA para un PPT
+ *  Retorna: [{ slideIndex: -1|N, buffer: Buffer }, ...]
+ * ============================================================ */
+async function generatePptImages(jid, data, temaOrigen) {
+  const images = [];
+  const textoDetector = `${temaOrigen} ${data.title || ''}`.toLowerCase();
+
+  // Si el usuario dice "sin imágenes", no generamos nada
+  if (/sin\s+im[aá]genes?|sin\s+fotos?|no\s+quiero\s+im[aá]genes?/.test(textoDetector)) {
+    console.log('   🚫 Usuario pidió SIN imágenes, saltando generación');
+    await sendText(jid, `🚫 Saltando imágenes (pediste sin imágenes)`);
+    return images;
+  }
+
+  const quiereMas = /m[aá]s\s+im[aá]genes?|con\s+muchas\s+im[aá]genes?|muchas\s+im[aá]genes?/.test(textoDetector);
+  const maxContenido = quiereMas ? 4 : 2;
+
+  const { generateAIImage } = await import('./services/documents/image-generator.js');
+
+  // ---- 1) Portada ----
+  if (data.coverImagePrompt) {
+    try {
+      await sendText(jid, `🎨 Generando imagen de portada...\n_~20 seg_`);
+      const buf = await generateAIImage(data.coverImagePrompt);
+      images.push({ slideIndex: -1, buffer: buf });
+      console.log(`   🎨 Portada generada (${(buf.length / 1024).toFixed(1)} KB)`);
+    } catch (err) {
+      console.warn('   ⚠️  Portada IA falló:', err.message);
+    }
+  }
+
+  // ---- 2) Imágenes de contenido ----
+  const contentImgs = Array.isArray(data.contentImages) ? data.contentImages : [];
+  const toGenerate = contentImgs.slice(0, maxContenido);
+
+  for (let i = 0; i < toGenerate.length; i++) {
+    const ci = toGenerate[i];
+    if (typeof ci.slideIndex !== 'number' || !ci.prompt) continue;
+    try {
+      await sendText(jid, `🎨 Generando imagen ${i + 1}/${toGenerate.length}...\n_~20 seg_`);
+      const buf = await generateAIImage(ci.prompt);
+      images.push({ slideIndex: ci.slideIndex, buffer: buf });
+      console.log(`   🎨 Imagen slide #${ci.slideIndex} generada (${(buf.length / 1024).toFixed(1)} KB)`);
+    } catch (err) {
+      console.warn(`   ⚠️  Imagen ${i + 1} falló:`, err.message);
+    }
+  }
+
+  console.log(`   ✅ Total imágenes generadas: ${images.length}`);
+  return images;
 }
 
 /* ============================================================
@@ -428,8 +480,6 @@ async function handleMessage(sock, msg) {
         return;
       }
 
-      // Guardar el texto para dar contexto a Mermaid si el usuario
-      // luego pide un diagrama de "este documento"
       lastReceivedDocument.set(jid, {
         text: docText,
         filename,
@@ -701,7 +751,7 @@ async function handleMessage(sock, msg) {
           title: `${titulo} — ${i + 1}`,
           bullets: [s],
         }));
-        buffer = await gen.generatePowerPoint(titulo, slides);
+        buffer = await gen.generatePowerPoint(titulo, slides, []);
         filename = safeFilename(titulo, 'pptx');
         mimetype = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
       } else if (tipo === 'pdf') {
@@ -732,18 +782,32 @@ async function handleMessage(sock, msg) {
   // ==================== CREAR DOCUMENTOS CON IA ====================
   if (lower.startsWith('!crear ')) {
     const rest = text.slice(7).trim();
-    const parts = rest.split('|').map(s => s.trim()).filter(Boolean);
 
-    if (parts.length < 2) {
-      await sendText(jid, `🤖 *Crear documentos con IA*\n\nFormato: \`!crear <tipo> | <tema>\`\n\n*Tipos:*\n• \`word\` → Informe formal\n• \`pdf\` → Documento PDF\n• \`excel\` → Tabla de datos\n• \`ppt\` → Presentación\n\n*Ejemplos:*\n\`!crear word | NIA 500 evidencia de auditoría\`\n\`!crear excel | Presupuesto mensual de una MYPE\`\n\`!crear ppt | Encaje bancario en Perú\`\n\n_Después puedes usar \`!mejorar ...\` para iterar_`);
+    const firstSpace = rest.indexOf(' ');
+    let tipo = (firstSpace > 0 ? rest.slice(0, firstSpace) : rest).toLowerCase().trim();
+
+    const TYPOS = {
+      exel: 'excel', excell: 'excel', exce: 'excel', exl: 'excel', ecxel: 'excel',
+      wor: 'word', worl: 'word', wrd: 'word', wrod: 'word', doc: 'word', docx: 'word',
+      pfd: 'pdf', dpf: 'pdf', pf: 'pdf',
+      ptt: 'ppt', pt: 'ppt', power: 'ppt', powerpo: 'ppt', pp: 'ppt', pptx: 'ppt',
+    };
+    if (TYPOS[tipo]) {
+      console.log(`   ✏️  Typo corregido: "${tipo}" → "${TYPOS[tipo]}"`);
+      tipo = TYPOS[tipo];
+    }
+
+    if (!['word', 'pdf', 'excel', 'ppt'].includes(tipo)) {
+      await sendText(jid, `❌ Tipo "${tipo}" no válido. Usa: word, pdf, excel, ppt\n\nEjemplo: \`!crear word crianza de pollitos en Junín\``);
       return;
     }
 
-    const [tipo, ...temaParts] = parts;
-    const tema = temaParts.join(' | ');
+    let tema = firstSpace > 0 ? rest.slice(firstSpace + 1).trim() : '';
+    if (tema.startsWith('|')) tema = tema.slice(1).trim();
+    tema = tema.replace(/\s*\|\s*/g, ' ').trim();
 
-    if (!['word', 'pdf', 'excel', 'ppt'].includes(tipo)) {
-      await sendText(jid, `❌ Tipo "${tipo}" no válido. Usa: word, pdf, excel, ppt`);
+    if (!tema) {
+      await sendText(jid, `🤖 *Crear documentos con IA*\n\nFormato: \`!crear <tipo> <tema>\`\n\n*Tipos:*\n• \`word\` → Informe formal\n• \`pdf\` → Documento PDF\n• \`excel\` → Tabla de datos\n• \`ppt\` → Presentación con imágenes IA\n\n*Ejemplos:*\n\`!crear word crianza de pollitos en Junín\`\n\`!crear ppt Los negocios más rentables en Perú\`\n\`!crear excel presupuesto mensual de una MYPE\``);
       return;
     }
 
@@ -774,7 +838,8 @@ async function handleMessage(sock, msg) {
         filename = safeFilename(data.title || tema, 'xlsx');
         mimetype = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
       } else if (tipo === 'ppt') {
-        buffer = await gen.generatePowerPoint(data.title || tema, data.slides || []);
+        const images = await generatePptImages(jid, data, tema);
+        buffer = await gen.generatePowerPoint(data.title || tema, data.slides || [], images);
         filename = safeFilename(data.title || tema, 'pptx');
         mimetype = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
       }
@@ -785,7 +850,7 @@ async function handleMessage(sock, msg) {
         fileName: filename,
       });
 
-      lastDocument.set(jid, { tipo, tema, filename });
+      lastDocument.set(jid, { tipo, tema, filename, data });
 
       const kb = (buffer.length / 1024).toFixed(1);
       await sendText(jid, `✅ *${filename}* · ${kb} KB\n\n¿Quieres ajustes? Usa \`!mejorar <instrucciones>\``);
@@ -817,7 +882,7 @@ async function handleMessage(sock, msg) {
 
     try {
       const { aiWrite } = await import('./services/documents/ai-writer.js');
-      const { data, provider } = await aiWrite(last.tipo, last.tema, feedback);
+      const { data, provider } = await aiWrite(last.tipo, last.tema, feedback, last.data);
 
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       await sendText(jid, `📄 Versión mejorada lista · ${provider} en ${elapsed}s\nGenerando archivo...`);
@@ -839,7 +904,8 @@ async function handleMessage(sock, msg) {
         filename = safeFilename(data.title || last.tema, 'xlsx');
         mimetype = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
       } else if (last.tipo === 'ppt') {
-        buffer = await gen.generatePowerPoint(data.title || last.tema, data.slides || []);
+        const images = await generatePptImages(jid, data, last.tema);
+        buffer = await gen.generatePowerPoint(data.title || last.tema, data.slides || [], images);
         filename = safeFilename(data.title || last.tema, 'pptx');
         mimetype = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
       }
@@ -850,7 +916,8 @@ async function handleMessage(sock, msg) {
         fileName: filename,
       });
 
-      lastDocument.set(jid, { tipo: last.tipo, tema: last.tema, filename });
+      // Preservar data para futuras mejoras
+      lastDocument.set(jid, { tipo: last.tipo, tema: last.tema, filename, data });
 
       const kb = (buffer.length / 1024).toFixed(1);
       await sendText(jid, `✅ *${filename}* · ${kb} KB\n\nOtro ajuste? Usa \`!mejorar ...\``);
@@ -1646,13 +1713,10 @@ async function handlePing(jid) {
 
 /* ============================================================
  *  Wrapper con cola de mensajes por usuario
- *  Todos los mensajes del MISMO jid pasan por turnos, uno tras
- *  otro. Distintos jid siguen procesándose en paralelo.
  * ============================================================ */
 async function handleMessageQueued(sock, msg) {
   const jid = msg.key?.remoteJid;
   if (!jid) {
-    // Sin jid no podemos encolar; procesar directo
     return handleMessage(sock, msg);
   }
   return enqueueForUser(jid, () => handleMessage(sock, msg));
