@@ -112,7 +112,7 @@ async function extractPDF(buffer) {
 
   try {
     const { GoogleGenAI } = await import('@google/genai');
-    const { config } = await import('../config/env.js');
+    const { config } = await import('../../config/env.js');
 
     const gemini = new GoogleGenAI({ apiKey: config.geminiApiKey });
 
