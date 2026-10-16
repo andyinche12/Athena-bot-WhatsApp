@@ -43,7 +43,7 @@ const geminiClient = config.geminiApiKey
 const MODELS = {
   groq: 'openai/gpt-oss-120b',
   nvidia: 'nvidia/nemotron-3-ultra-550b-a55b',
-  openrouter: 'nvidia/nemotron-3-super-120b-a12b:free',
+  openrouter: 'openrouter/auto',
   gemini: 'gemini-3.5-flash-lite',
 };
 
