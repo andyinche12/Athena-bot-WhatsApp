@@ -456,6 +456,13 @@ async function handleMessage(sock, msg) {
   const jid = msg.key.remoteJid;
   const pushName = msg.pushName || 'desconocido';
 
+  // ==================== NORMALIZAR DOCUMENTOS CON CAPTION ====================
+  // WhatsApp usa un wrapper distinto cuando el documento tiene caption
+  if (msg.message?.documentWithCaptionMessage?.message?.documentMessage) {
+    msg.message.documentMessage = msg.message.documentWithCaptionMessage.message.documentMessage;
+    console.log('   🔧 Documento con caption normalizado');
+  }
+
   const isAudio = !!msg.message?.audioMessage;
   const isImage = !!msg.message?.imageMessage;
   const isDocument = !!msg.message?.documentMessage;
