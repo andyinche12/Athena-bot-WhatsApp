@@ -91,13 +91,29 @@ function normalizeResult(result) {
 
 /** PDF → pdfjs-dist (viene con officeparser) */
 async function extractPDF(buffer) {
+  console.log('   🔍 [parser] Iniciando extracción de PDF...');
+
+  let pdfjs;
   try {
-    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    console.log('   ✅ [parser] pdfjs-dist importado');
+  } catch (err) {
+    console.error('   ❌ [parser] No se pudo importar pdfjs-dist:', err.message);
+    return '';
+  }
+
+  try {
+    // En Node.js, pdfjs v6 necesita disableWorker:true (no hay Web Workers)
     const doc = await pdfjs.getDocument({
       data: new Uint8Array(buffer),
       useSystemFonts: true,
       disableFontFace: true,
+      disableWorker: true,        
+      isEvalSupported: false,     
+      verbosity: 0,               
     }).promise;
+
+    console.log(`   📄 [parser] PDF abierto: ${doc.numPages} páginas`);
 
     let text = '';
     const maxPages = Math.min(doc.numPages, 50);
@@ -107,9 +123,12 @@ async function extractPDF(buffer) {
       const pageText = content.items.map((it) => it.str).join(' ');
       if (pageText.trim()) text += pageText + '\n\n';
     }
+
+    console.log(`   ✅ [parser] Texto extraído: ${text.length} chars de ${maxPages} páginas`);
     return text.trim();
   } catch (err) {
-    console.error('   ⚠️  [parser] PDF fallback falló:', err.message);
+    console.error('   ❌ [parser] PDF fallback falló:', err.message);
+    console.error('   ❌ [parser] Stack:', err.stack?.slice(0, 400));
     return '';
   }
 }
