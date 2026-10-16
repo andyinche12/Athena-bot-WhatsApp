@@ -4,15 +4,13 @@
  * Estrategia:
  *   1. Intenta con officeparser (CJS vía createRequire)
  *   2. Si falla, usa fallbacks específicos por formato:
- *      - PDF   → pdfjs-dist
+ *      - PDF   → pdfjs-dist v3 (nativo, sin worker) + Gemini Vision OCR si falla
  *      - XLSX  → xlsx
  *      - DOCX/PPTX → jszip (extrae el XML interno)
- *
- * Todas esas librerías YA están instaladas como dependencias.
  */
 
 import { createRequire } from 'node:module';
-import { downloadMediaMessage } from '@whiskeysockets/baileys';
+import { downloadMediaMessage } from '@whiskysockets/baileys';
 
 const require = createRequire(import.meta.url);
 
@@ -29,11 +27,6 @@ try {
   console.error('⚠️  [parser] No se pudo cargar officeparser:', err.message);
 }
 
-/**
- * Devuelve la función de parseo de officeparser, o null si no existe.
- * IMPORTANTE: preferimos parseOfficeAsync porque devuelve el texto,
- * mientras que parseOffice puede devolver un objeto de config.
- */
 function getOfficeParserFn() {
   if (!_officeParser) return null;
   const candidates = [
@@ -48,24 +41,17 @@ function getOfficeParserFn() {
   return null;
 }
 
-/**
- * Normaliza lo que devuelve officeparser a un string.
- * Si devuelve un objeto (típicamente el config), devuelve '' para
- * que el caller use el fallback por formato.
- */
 function normalizeResult(result) {
   if (result == null) return '';
   if (typeof result === 'string') return result;
 
   if (typeof result === 'object') {
-    // Casos típicos de éxito
     const textKeys = ['text', 'content', 'parsedText', 'extractedText', 'body'];
     for (const k of textKeys) {
       if (typeof result[k] === 'string' && result[k].length > 0) {
         return result[k];
       }
     }
-    // Algunas versiones envuelven la respuesta en { data: { text } }
     for (const outer of Object.values(result)) {
       if (outer && typeof outer === 'object') {
         for (const k of textKeys) {
@@ -75,10 +61,6 @@ function normalizeResult(result) {
         }
       }
     }
-
-    // ⚠️ NO devolvemos JSON.stringify porque eso produce basura como
-    // {"config":{"password":"","newlineDelimiter":"\n",...}}
-    // En su lugar, devolvemos '' y dejamos que el fallback actúe.
     return '';
   }
 
@@ -86,54 +68,96 @@ function normalizeResult(result) {
 }
 
 // ============================================================
-//  Fallbacks por formato (usan librerías ya instaladas)
+//  PDF → pdfjs-dist v3 + Gemini Vision OCR fallback
 // ============================================================
-
-/** PDF → pdfjs-dist (viene con officeparser) */
 async function extractPDF(buffer) {
   console.log('   🔍 [parser] Iniciando extracción de PDF...');
 
-  let pdfjs;
+  // ============ INTENTO 1: pdfjs v3 ============
+  let pdfText = '';
   try {
-    pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-    console.log('   ✅ [parser] pdfjs-dist importado');
-  } catch (err) {
-    console.error('   ❌ [parser] No se pudo importar pdfjs-dist:', err.message);
-    return '';
-  }
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.js');
+    console.log('   ✅ [parser] pdfjs-dist v3 importado');
 
-  try {
-    // En Node.js, pdfjs v6 necesita disableWorker:true (no hay Web Workers)
     const doc = await pdfjs.getDocument({
       data: new Uint8Array(buffer),
       useSystemFonts: true,
       disableFontFace: true,
-      disableWorker: true,        
-      isEvalSupported: false,     
-      verbosity: 0,               
     }).promise;
 
     console.log(`   📄 [parser] PDF abierto: ${doc.numPages} páginas`);
 
-    let text = '';
     const maxPages = Math.min(doc.numPages, 50);
     for (let i = 1; i <= maxPages; i++) {
       const page = await doc.getPage(i);
       const content = await page.getTextContent();
-      const pageText = content.items.map((it) => it.str).join(' ');
-      if (pageText.trim()) text += pageText + '\n\n';
+      const pageText = content.items.map((it) => it.str || '').join(' ');
+      console.log(`   📄 [parser] Página ${i}: ${pageText.length} chars`);
+      if (pageText.trim()) pdfText += pageText + '\n\n';
     }
 
-    console.log(`   ✅ [parser] Texto extraído: ${text.length} chars de ${maxPages} páginas`);
-    return text.trim();
+    pdfText = pdfText.trim();
+    console.log(`   ✅ [parser] pdfjs extrajo: ${pdfText.length} chars`);
   } catch (err) {
-    console.error('   ❌ [parser] PDF fallback falló:', err.message);
-    console.error('   ❌ [parser] Stack:', err.stack?.slice(0, 400));
-    return '';
+    console.warn('   ⚠️  [parser] pdfjs falló:', err.message);
   }
+
+  // ============ SI HAY SUFICIENTE TEXTO, DEVOLVERLO ============
+  if (pdfText.length >= 200) {
+    return pdfText;
+  }
+
+  // ============ INTENTO 2: OCR con Gemini Vision ============
+  console.log(`   🤖 [parser] Poco texto (${pdfText.length} chars). Usando Gemini Vision para OCR...`);
+
+  try {
+    const { GoogleGenAI } = await import('@google/genai');
+    const { config } = await import('../config/env.js');
+
+    const gemini = new GoogleGenAI({ apiKey: config.geminiApiKey });
+
+    const base64Pdf = buffer.toString('base64');
+    const models = ['gemini-3.8-flash', 'gemini-3.5-flash-lite'];
+
+    for (const model of models) {
+      try {
+        console.log(`   🧠 [parser] Probando OCR con ${model}...`);
+
+        const response = await gemini.models.generateContent({
+          model,
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                { text: 'Transcribe LITERALMENTE todo el contenido de este PDF. Si tiene tablas, mantén el formato. Si tiene imágenes con texto, transcribe lo que se lea. Responde SOLO con el texto transcrito, sin explicaciones.' },
+                { inlineData: { mimeType: 'application/pdf', data: base64Pdf } },
+              ],
+            },
+          ],
+          config: { temperature: 0.1, maxOutputTokens: 8192 },
+        });
+
+        const ocrText = (response.text || '').trim();
+        if (ocrText.length > 200) {
+          console.log(`   ✅ [parser] Gemini OCR OK (${ocrText.length} chars)`);
+          return ocrText;
+        }
+      } catch (err) {
+        console.warn(`   ⚠️  [parser] ${model} falló:`, err.message);
+      }
+    }
+  } catch (err) {
+    console.error('   ❌ [parser] Gemini OCR también falló:', err.message);
+  }
+
+  // ============ SI NADA FUNCIONÓ ============
+  console.error('   ❌ [parser] No se pudo extraer texto del PDF');
+  return pdfText;
 }
 
-/** XLSX → xlsx (ya instalado) */
+// ============================================================
+//  XLSX → xlsx
+// ============================================================
 async function extractXLSX(buffer) {
   try {
     const XLSX = require('xlsx');
@@ -150,7 +174,9 @@ async function extractXLSX(buffer) {
   }
 }
 
-/** DOCX/PPTX → jszip (ya instalado como dep de docx/pptxgenjs) */
+// ============================================================
+//  DOCX/PPTX → jszip
+// ============================================================
 async function extractZipXml(buffer, mimetype) {
   try {
     const JSZip = require('jszip');
@@ -158,10 +184,8 @@ async function extractZipXml(buffer, mimetype) {
     const texts = [];
 
     if (mimetype.includes('wordprocessingml') || mimetype === 'application/msword') {
-      // Word: docx/word/document.xml
       const docXml = await zip.file('word/document.xml')?.async('string');
       if (docXml) {
-        // Extraer contenido de <w:t>...</w:t>
         const matches = docXml.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g);
         for (const m of matches) texts.push(m[1]);
       }
@@ -169,7 +193,6 @@ async function extractZipXml(buffer, mimetype) {
       mimetype.includes('presentationml') ||
       mimetype === 'application/vnd.ms-powerpoint'
     ) {
-      // PPTX: ppt/slides/slide*.xml (ordenados numéricamente)
       const slideFiles = Object.keys(zip.files)
         .filter((f) => /^ppt\/slides\/slide\d+\.xml$/.test(f))
         .sort((a, b) => {
@@ -282,7 +305,7 @@ export async function extractDocumentText(msg, sock) {
     );
   }
 
-  // Limpiar y truncar (8000 chars para no exceder el límite de Groq)
+  // Limpiar y truncar
   text = String(text).trim();
   if (text.length > 8000) {
     text = text.slice(0, 8000) + '\n\n[... documento truncado por longitud ...]';
