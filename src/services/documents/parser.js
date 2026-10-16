@@ -10,7 +10,7 @@
  */
 
 import { createRequire } from 'node:module';
-import { downloadMediaMessage } from '@whiskysockets/baileys';
+import { downloadMediaMessage } from '@whiskeysockets/baileys';
 
 const require = createRequire(import.meta.url);
 
