@@ -58,6 +58,9 @@ import {
   recordAnswer,
   getQuizSummary,
 } from './services/flashcards/quiz.js';
+import { parseSyllabus, convertToSyllabusFormat } from './services/syllabus/parser.js';
+import { readFileSync, writeFileSync, existsSync, copyFileSync } from 'fs';
+import { join } from 'path';
 import { createServer } from 'http';
 
 console.log('🤖 Athena Bot — Asistente Académico');
@@ -161,8 +164,11 @@ Extras:
 Ejemplos:
 !crear word NIA 500 evidencia de auditoría
 !crear ppt Los negocios más rentables en Perú
-!crear ppt Empresas peruanas sin imágenes
 !mejorar hazlo más corto y agrega ejemplos
+
+📚 *AUTO-IMPORTAR SÍLABOS*
+Envía el PDF de un sílabo → lo detecto y actualizo el sistema
+Ejemplo: envía "Silabo Auditoria.pdf" y responde "sí"
 
 📄 *GENERAR MANUAL*
 !generar pdf | Título | Párrafo1 | Párrafo2
@@ -171,12 +177,9 @@ Ejemplos:
 🎨 *IMÁGENES ARTÍSTICAS (IA)*
 !dibujar <descripción> → Imagen con IA (Cloudflare FLUX)
 !draw <descripción> → Alias
-Ej: !dibujar un gato astronauta flotando en el espacio
-También: "crea una imagen de un gatito" (sin !)
 
 🖼️ *GRÁFICOS/TEXTO*
 !imagen Título | Contenido → Gráfico simple SVG
-!img Título | Contenido (alias)
 
 📎 *LEER DOCUMENTOS*
 Envía PDF, Word, Excel o PPT → lo analizo
@@ -185,29 +188,18 @@ Envía PDF, Word, Excel o PPT → lo analizo
 !stats → Estadísticas + progreso
 !resumen-semana → Reporte semanal
 !ping → Estado de los 4 LLMs
-!modelos-nvidia → Ver modelos NVIDIA
 !reset → Borra historial
 !help → Esta ayuda
-!ayuda-rapida → Solo comandos básicos
 
 🎤 *AUDIO*
 Envía una nota de voz → la transcribo
 !voz <texto> → Forzar respuesta en audio
-!texto <texto> → Forzar respuesta en texto
 
 🖼️ *ANALIZAR IMÁGENES*
-Envía una foto (con o sin caption) → la analizo
+Envía una foto → la analizo
 
 ✅ *ESTUDIO*
-"sí estudié" / "no estudié" → Responder al recordatorio
-
-🧪 *DEBUG*
-!test-today → Simula recordatorio 07:00
-!test-midday → Simula clima mediodía
-!test-reminder → Simula recordatorio 19:00
-!test-review → Simula repaso nocturno
-!test-week → Simula resumen semanal
-!test-sunday → Simula "Preparando el lunes"`;
+"sí estudié" / "no estudié" → Responder al recordatorio`;
 
 const HELP_SHORT = `🤖 *Comandos básicos* (escribe !help para ver todos)
 
@@ -230,17 +222,14 @@ const HELP_SHORT = `🤖 *Comandos básicos* (escribe !help para ver todos)
 
 📊 *Diagramas*
 "hazme un mapa conceptual de X" → Mermaid
-"crea un diagrama de flujo de X" → Mermaid
 
 📄 *Documentos*
 !crear word NIA 500 → Word con IA
 !crear ppt tema → PPT con 3 imágenes IA
 !mejorar hazlo más corto → Regenerar
-!generar pdf | Título | Contenido
 
-🎨 *Imágenes*
-!dibujar un gato en el espacio → IA (Cloudflare)
-!imagen Título | Contenido → Gráfico simple
+📚 *Sílabos*
+Envía un PDF de sílabo → te pregunto si actualizar
 
 !stats → Tus estadísticas
 !help → Ayuda completa
@@ -266,19 +255,21 @@ const VOICE_KEYWORDS = [
 ];
 
 /* ============================================================
- *  Estado en memoria: último documento generado por usuario
+ *  Estado en memoria
  * ============================================================ */
 const lastDocument = new Map(); // jid → { tipo, tema, filename, data }
+const lastReceivedDocument = new Map(); // jid → { text, filename, timestamp }
 
 /* ============================================================
- *  Último documento RECIBIDO (para dar contexto a Mermaid)
+ *  Sílabo pendiente de importar
+ *  jid → { parsed, timestamp, awaitingKey? }
  * ============================================================ */
-const lastReceivedDocument = new Map(); // jid → { text, filename, timestamp }
+const pendingSyllabusUpdates = new Map();
 
 /* ============================================================
  *  Cola de mensajes por usuario
  * ============================================================ */
-const userQueues = new Map(); // jid → Promise de la cola actual
+const userQueues = new Map();
 
 function enqueueForUser(jid, task) {
   const prev = userQueues.get(jid) || Promise.resolve();
@@ -299,13 +290,9 @@ function enqueueForUser(jid, task) {
  * ============================================================ */
 function detectDiagramIntent(text) {
   if (!text) return false;
-
   const lower = text.toLowerCase();
-
   const hasDiagramNoun = /\b(mapa\s+conceptual|mapa\s+mental|mapas\s+conceptuales|mapas\s+mentales|diagrama|diagramas|flujograma|flujogramas|organigrama|organigramas|flowchart|esquema|esquemas|cuadro\s+sin[óo]ptico|mind\s*map|concept\s*map)\b/i.test(lower);
-
   const hasCreateVerb = /\b(crea|crear|creas|crees|haz|hazme|hacer|genera|generar|generas|realiza|realizar|elabora|elaborar|quiero|quisiera|necesito|me\s+gustar[íi]a|puedes|podr[íi]as|arma|ármame)\b/i.test(lower);
-
   return hasDiagramNoun && hasCreateVerb;
 }
 
@@ -314,33 +301,23 @@ function detectDiagramIntent(text) {
  * ============================================================ */
 function detectImageIntent(text) {
   if (!text) return null;
-
   const lower = text.toLowerCase();
-
   const hasCreateVerb = /\b(crea|crear|creas|crees|dibuja|dibujar|dibujas|dib[úu]jame|dibujame|haz|hazme|hacer|genera|generar|generas|gen[ée]rame|generame|realiza|realizar|realizas|elabora|elaborar|elaboras|quiero|quisiera|necesito|me\s+gustar[íi]a|puedes|podr[íi]as)\b/i.test(lower);
-
   const hasVisualNoun = /\b(imagen|im[áa]genes|foto|fotos|dibujo|dibujos|ilustraci[óo]n|ilustraciones|infograf[íi]a|infograf[íi]as|gr[áa]fico|gr[áa]ficos)\b/i.test(lower);
-
   if (!hasCreateVerb || !hasVisualNoun) return null;
-
-  if (/^(qu[ée]|cu[áa]l|d[óo]nde|c[óo]mo|por\s+qu[ée])\b/i.test(lower.trim())) {
-    return null;
-  }
-
+  if (/^(qu[ée]|cu[áa]l|d[óo]nde|c[óo]mo|por\s+qu[ée])\b/i.test(lower.trim())) return null;
   return { description: text.trim() };
 }
 
 /* ============================================================
- *  Helper: genera todas las imágenes IA para un PPT
- *  Retorna: [{ slideIndex: -1|N, buffer: Buffer }, ...]
+ *  Helper: genera imágenes IA para un PPT
  * ============================================================ */
 async function generatePptImages(jid, data, temaOrigen) {
   const images = [];
   const textoDetector = `${temaOrigen} ${data.title || ''}`.toLowerCase();
 
-  // Si el usuario dice "sin imágenes", no generamos nada
   if (/sin\s+im[aá]genes?|sin\s+fotos?|no\s+quiero\s+im[aá]genes?/.test(textoDetector)) {
-    console.log('   🚫 Usuario pidió SIN imágenes, saltando generación');
+    console.log('   🚫 Usuario pidió SIN imágenes');
     await sendText(jid, `🚫 Saltando imágenes (pediste sin imágenes)`);
     return images;
   }
@@ -350,7 +327,6 @@ async function generatePptImages(jid, data, temaOrigen) {
 
   const { generateAIImage } = await import('./services/documents/image-generator.js');
 
-  // ---- 1) Portada ----
   if (data.coverImagePrompt) {
     try {
       await sendText(jid, `🎨 Generando imagen de portada...\n_~20 seg_`);
@@ -362,7 +338,6 @@ async function generatePptImages(jid, data, temaOrigen) {
     }
   }
 
-  // ---- 2) Imágenes de contenido ----
   const contentImgs = Array.isArray(data.contentImages) ? data.contentImages : [];
   const toGenerate = contentImgs.slice(0, maxContenido);
 
@@ -381,6 +356,97 @@ async function generatePptImages(jid, data, temaOrigen) {
 
   console.log(`   ✅ Total imágenes generadas: ${images.length}`);
   return images;
+}
+
+/* ============================================================
+ *  Aplicar sílabo — actualiza data/syllabus.json
+ * ============================================================ */
+async function aplicarSilabo(jid, parsed, forcedKey = null) {
+  try {
+    const syllabusPath = join(process.cwd(), 'data', 'syllabus.json');
+    const backupPath = join(
+      process.cwd(),
+      'data',
+      `syllabus.backup-${new Date().toISOString().slice(0, 10)}.json`
+    );
+
+    if (!existsSync(syllabusPath)) {
+      await sendText(jid, '❌ No encuentro el archivo syllabus.json');
+      return;
+    }
+
+    const syllabus = JSON.parse(readFileSync(syllabusPath, 'utf-8'));
+
+    const normalize = (s) =>
+      (s || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9\s]/g, '')
+        .trim();
+
+    let matchedKey = forcedKey;
+
+    if (!matchedKey) {
+      const target = normalize(parsed.cursoNombre);
+      for (const [key, course] of Object.entries(syllabus.courses)) {
+        const courseName = normalize(course.name);
+        if (
+          courseName.includes(target) ||
+          target.includes(courseName) ||
+          (target.length > 5 && courseName.length > 5 && target.slice(0, 8) === courseName.slice(0, 8))
+        ) {
+          matchedKey = key;
+          break;
+        }
+      }
+    }
+
+    if (!matchedKey || !syllabus.courses[matchedKey]) {
+      await sendText(
+        jid,
+        `⚠️ No pude emparejar el curso "${parsed.cursoNombre}" con los del sistema.\n\n` +
+        `*Cursos disponibles:*\n` +
+        Object.entries(syllabus.courses)
+          .map(([k, c]) => `• \`${k}\` → ${c.name}`)
+          .join('\n') +
+        `\n\nEscríbeme el *key* exacto al que quieres asociarlo (ej: \`auditoria\`), o escribe \`cancelar\`.`
+      );
+      pendingSyllabusUpdates.set(jid, {
+        parsed,
+        timestamp: Date.now(),
+        awaitingKey: true,
+      });
+      return;
+    }
+
+    copyFileSync(syllabusPath, backupPath);
+    console.log(`   💾 Backup guardado: ${backupPath}`);
+
+    const converted = convertToSyllabusFormat(parsed, matchedKey);
+
+    if (converted.name && converted.name !== matchedKey) {
+      syllabus.courses[matchedKey].name = converted.name;
+    }
+
+    syllabus.courses[matchedKey].topics = converted.topics;
+
+    writeFileSync(syllabusPath, JSON.stringify(syllabus, null, 2), 'utf-8');
+
+    await sendText(
+      jid,
+      `✅ *Sílabo actualizado*\n\n` +
+      `📖 Curso: ${syllabus.courses[matchedKey].name}\n` +
+      `📊 Semanas: ${parsed.semanas.length}\n` +
+      `📁 Backup: \`syllabus.backup-${new Date().toISOString().slice(0, 10)}.json\`\n\n` +
+      `⚠️ Reinicia el bot para que los cambios surtan efecto.`
+    );
+
+    console.log(`   ✅ Sílabo actualizado: ${matchedKey} (${parsed.semanas.length} semanas)`);
+  } catch (err) {
+    console.error('Error aplicando sílabo:', err.message);
+    await sendText(jid, `❌ Error actualizando sílabo: ${err.message}`);
+  }
 }
 
 /* ============================================================
@@ -442,7 +508,7 @@ async function handleMessage(sock, msg) {
     }
   }
 
-  // ==================== ANÁLISIS DE IMAGEN (adjunta) ====================
+  // ==================== ANÁLISIS DE IMAGEN ====================
   if (isImage) {
     try {
       const caption = msg.message.imageMessage?.caption || '';
@@ -504,7 +570,102 @@ async function handleMessage(sock, msg) {
   console.log(`   Texto: "${text.slice(0, 200)}${text.length > 200 ? '...' : ''}"`);
   const lower = text.trim().toLowerCase();
 
-  // ==================== DETECCIÓN DE DIAGRAMAS (Mermaid) ====================
+  // ==================== DETECCIÓN DE SÍLABO ====================
+  if (isDocument && lastReceivedDocument.has(jid)) {
+    const lastDoc = lastReceivedDocument.get(jid);
+    const textoDetector = (lastDoc.text || '').toLowerCase();
+    const captionLower = (text || '').toLowerCase();
+
+    const probableSilabo =
+      /\bsilabo|\bsílabo|unidad\s+didactica|contenido\s+semanal|semana\s+1|sem\s+0?1/i.test(textoDetector) ||
+      /silabo|sílabo|actualizar\s+silabo|importar\s+silabo/i.test(captionLower);
+
+    if (probableSilabo) {
+      console.log(`   📚 Posible sílabo detectado, analizando...`);
+      await sendText(jid, `🔍 Analizando si es un sílabo...`);
+
+      try {
+        const parsed = await parseSyllabus(lastDoc.text);
+
+        if (parsed.esSilabo) {
+          const preview = parsed.semanas.slice(0, 5)
+            .map((s) => `SEM ${s.semana}: ${s.tema.slice(0, 80)}${s.tema.length > 80 ? '...' : ''}`)
+            .join('\n');
+
+          const msgOut = [
+            `📚 *Detecté un SÍLABO*`,
+            ``,
+            `📖 Curso: *${parsed.cursoNombre || 'desconocido'}*`,
+            `👨‍🏫 Docente: ${parsed.docente || 'no detectado'}`,
+            `📊 Semanas: ${parsed.semanas.length}`,
+            ``,
+            `*Preview:*`,
+            preview,
+            parsed.semanas.length > 5 ? `_(+${parsed.semanas.length - 5} más)_` : '',
+            ``,
+            `¿Actualizo el sílabo del sistema?`,
+            `Responde *sí* para actualizar o *no* para cancelar.`,
+          ].filter(Boolean).join('\n');
+
+          await sendText(jid, msgOut);
+
+          pendingSyllabusUpdates.set(jid, {
+            parsed,
+            timestamp: Date.now(),
+          });
+          return;
+        } else {
+          console.log(`   ⚠️  No era un sílabo (${parsed.reason || 'sin detalle'})`);
+        }
+      } catch (err) {
+        console.error('Error procesando sílabo:', err.message);
+      }
+    }
+  }
+
+  // ==================== RESPUESTA A SÍLABO PENDIENTE ====================
+  if (pendingSyllabusUpdates.has(jid)) {
+    const pending = pendingSyllabusUpdates.get(jid);
+    const expired = Date.now() - pending.timestamp > 10 * 60 * 1000;
+
+    if (expired) {
+      pendingSyllabusUpdates.delete(jid);
+    } else if (pending.awaitingKey) {
+      // El usuario debe darnos el key del curso
+      if (['cancelar', 'no', '❌'].includes(lower)) {
+        pendingSyllabusUpdates.delete(jid);
+        await sendText(jid, '👍 Ok, cancelado.');
+        return;
+      }
+      const keyCandidate = lower.trim();
+      // Validar que exista en syllabus.json
+      try {
+        const sp = join(process.cwd(), 'data', 'syllabus.json');
+        const syl = JSON.parse(readFileSync(sp, 'utf-8'));
+        if (syl.courses[keyCandidate]) {
+          pendingSyllabusUpdates.delete(jid);
+          await aplicarSilabo(jid, pending.parsed, keyCandidate);
+          return;
+        } else {
+          await sendText(jid, `❌ El key "${keyCandidate}" no existe. Intenta de nuevo o escribe \`cancelar\`.`);
+          return;
+        }
+      } catch (err) {
+        await sendText(jid, `❌ Error leyendo syllabus.json: ${err.message}`);
+        return;
+      }
+    } else if (['sí', 'si', 'yes', 's', '✅'].includes(lower)) {
+      pendingSyllabusUpdates.delete(jid);
+      await aplicarSilabo(jid, pending.parsed);
+      return;
+    } else if (['no', 'cancelar', '❌'].includes(lower)) {
+      pendingSyllabusUpdates.delete(jid);
+      await sendText(jid, '👍 Ok, cancelado. No actualicé el sílabo.');
+      return;
+    }
+  }
+
+  // ==================== DETECCIÓN DE DIAGRAMAS ====================
   if (!isAudio && !isImage && !isDocument && detectDiagramIntent(text)) {
     console.log(`   📊 Detectada intención de diagrama (Mermaid)`);
     const preview = text.length > 100 ? text.slice(0, 100) + '...' : text;
@@ -518,8 +679,6 @@ async function handleMessage(sock, msg) {
         if (lastDoc && (Date.now() - lastDoc.timestamp) < 10 * 60 * 1000) {
           contextText = lastDoc.text;
           console.log(`   📎 Usando contexto de "${lastDoc.filename}"`);
-        } else {
-          console.log(`   ⚠️  Menciona documento pero no hay reciente en memoria`);
         }
       }
 
@@ -539,7 +698,7 @@ async function handleMessage(sock, msg) {
     return;
   }
 
-  // ==================== DETECCIÓN NATURAL DE IMÁGENES ARTÍSTICAS ====================
+  // ==================== DETECCIÓN NATURAL DE IMÁGENES ====================
   if (!isAudio && !isImage && !isDocument) {
     const imageIntent = detectImageIntent(text);
     if (imageIntent) {
@@ -655,13 +814,13 @@ async function handleMessage(sock, msg) {
     return;
   }
 
-  // ==================== DIBUJAR IMAGEN ARTÍSTICA (Cloudflare) ====================
+  // ==================== DIBUJAR IMAGEN ARTÍSTICA ====================
   if (lower.startsWith('!dibujar ') || lower.startsWith('!draw ')) {
     const offset = lower.startsWith('!dibujar ') ? 9 : 6;
     const prompt = text.slice(offset).trim();
 
     if (!prompt) {
-      await sendText(jid, `🎨 *Generar imágenes artísticas*\n\nFormato: \`!dibujar <descripción>\`\n\n*Ejemplos:*\n\`!dibujar un gato astronauta flotando en el espacio\`\n\`!dibujar un atardecer en los Andes peruanos, estilo acuarela\`\n\`!dibujar un poster minimalista sobre finanzas\``);
+      await sendText(jid, `🎨 *Generar imágenes artísticas*\n\nFormato: \`!dibujar <descripción>\``);
       return;
     }
 
@@ -691,7 +850,7 @@ async function handleMessage(sock, msg) {
     const parts = rest.split('|').map(s => s.trim()).filter(Boolean);
 
     if (parts.length < 1) {
-      await sendText(jid, `🖼️ *Generar gráficos de texto*\n\nFormato: \`!imagen <título> | <contenido>\`\n\n*Ejemplo:*\n\`!imagen Mi Resumen | Contenido del gráfico\`\n\n_Para imágenes artísticas usa \`!dibujar <descripción>\`_`);
+      await sendText(jid, `🖼️ *Generar gráficos de texto*\n\nFormato: \`!imagen <título> | <contenido>\``);
       return;
     }
 
@@ -723,7 +882,7 @@ async function handleMessage(sock, msg) {
     const parts = rest.split('|').map(s => s.trim()).filter(Boolean);
 
     if (parts.length < 2) {
-      await sendText(jid, `📄 *Generar documentos manualmente*\n\nFormato: \`!generar <tipo> | <titulo> | <contenido>\`\n\n*Tipos:* excel, word, ppt, pdf\n\n*Ejemplos:*\n\`!generar pdf | Resumen Auditoría | Contenido del documento\`\n\`!generar excel | Gastos | Concepto,Monto\\nAlmuerzo,25\``);
+      await sendText(jid, `📄 *Generar documentos manualmente*\n\nFormato: \`!generar <tipo> | <titulo> | <contenido>\``);
       return;
     }
 
@@ -807,7 +966,7 @@ async function handleMessage(sock, msg) {
     tema = tema.replace(/\s*\|\s*/g, ' ').trim();
 
     if (!tema) {
-      await sendText(jid, `🤖 *Crear documentos con IA*\n\nFormato: \`!crear <tipo> <tema>\`\n\n*Tipos:*\n• \`word\` → Informe formal\n• \`pdf\` → Documento PDF\n• \`excel\` → Tabla de datos\n• \`ppt\` → Presentación con imágenes IA\n\n*Ejemplos:*\n\`!crear word crianza de pollitos en Junín\`\n\`!crear ppt Los negocios más rentables en Perú\`\n\`!crear excel presupuesto mensual de una MYPE\``);
+      await sendText(jid, `🤖 *Crear documentos con IA*\n\nFormato: \`!crear <tipo> <tema>\``);
       return;
     }
 
@@ -868,17 +1027,17 @@ async function handleMessage(sock, msg) {
     const last = lastDocument.get(jid);
 
     if (!last) {
-      await sendText(jid, '❌ No tengo un documento reciente para mejorar.\n\nUsa primero:\n`!crear word | tema`');
+      await sendText(jid, '❌ No tengo un documento reciente para mejorar.');
       return;
     }
 
     if (!feedback) {
-      await sendText(jid, `🤔 Dime cómo quieres mejorarlo.\n\n*Ejemplos:*\n• \`!mejorar hazlo más corto\`\n• \`!mejorar agrega ejemplos numéricos\`\n• \`!mejorar incluye NIA 500 textual\`\n• \`!mejorar cambia el tono a más formal\`\n\n_Documento actual: ${last.filename}_`);
+      await sendText(jid, `🤔 Dime cómo quieres mejorarlo.\n\n*Ejemplos:*\n• \`!mejorar hazlo más corto\`\n• \`!mejorar agrega ejemplos numéricos\``);
       return;
     }
 
     const t0 = Date.now();
-    await sendText(jid, `🔧 Regenerando *${last.tipo.toUpperCase()}* sobre "${last.tema}"...\n_Feedback: "${feedback}"_\n_Esto puede tardar unos segundos_`);
+    await sendText(jid, `🔧 Regenerando *${last.tipo.toUpperCase()}* sobre "${last.tema}"...\n_Feedback: "${feedback}"_`);
 
     try {
       const { aiWrite } = await import('./services/documents/ai-writer.js');
@@ -916,7 +1075,6 @@ async function handleMessage(sock, msg) {
         fileName: filename,
       });
 
-      // Preservar data para futuras mejoras
       lastDocument.set(jid, { tipo: last.tipo, tema: last.tema, filename, data });
 
       const kb = (buffer.length / 1024).toFixed(1);
@@ -935,7 +1093,7 @@ async function handleMessage(sock, msg) {
     const input = text.slice(start).trim();
 
     if (!input) {
-      await sendText(jid, '❌ Uso: `!tarea <texto>`\nEjemplos:\n• !tarea entregar informe de auditoría\n• !tarea estudiar NIA 500 para el viernes');
+      await sendText(jid, '❌ Uso: `!tarea <texto>`');
       return;
     }
 
@@ -990,7 +1148,7 @@ async function handleMessage(sock, msg) {
     const id = parseInt(idStr, 10);
 
     if (isNaN(id)) {
-      await sendText(jid, '❌ Uso: `!completar <número>`\nEjemplo: !completar 3');
+      await sendText(jid, '❌ Uso: `!completar <número>`');
       return;
     }
 
@@ -1014,7 +1172,7 @@ async function handleMessage(sock, msg) {
     if (isInPomodoro(jid)) {
       const current = getPomodoro(jid);
       await humanDelay();
-      await sendText(jid, `⏱️ Ya tienes una sesión activa.\n\n${current.type === 'work' ? '🔴 Foco' : '☕ Descanso'} · Ronda ${current.currentRound}/${current.totalRounds}\nQuedan ${current.remainingMin} min.\n\nPara cancelar: !pomodoro-stop`);
+      await sendText(jid, `⏱️ Ya tienes una sesión activa.\n\n${current.type === 'work' ? '🔴 Foco' : '☕ Descanso'} · Ronda ${current.currentRound}/${current.totalRounds}\nQuedan ${current.remainingMin} min.`);
       return;
     }
 
@@ -1041,7 +1199,7 @@ async function handleMessage(sock, msg) {
     }
 
     await humanDelay();
-    await sendText(jid, `⏱️ *Pomodoro iniciado*\n\n🔴 Ronda 1/${rounds} — ${work} min de foco\n☕ Descanso: ${brk} min entre rondas\n\nTe aviso cuando termine la ronda. ¡Éxito! 💪`);
+    await sendText(jid, `⏱️ *Pomodoro iniciado*\n\n🔴 Ronda 1/${rounds} — ${work} min de foco\n☕ Descanso: ${brk} min entre rondas`);
     return;
   }
 
@@ -1063,7 +1221,7 @@ async function handleMessage(sock, msg) {
     }
     stopPomodoro(jid);
     await humanDelay();
-    await sendText(jid, '🛑 Sesión cancelada. Cuando quieras retomar, usa !pomodoro.');
+    await sendText(jid, '🛑 Sesión cancelada.');
     return;
   }
 
@@ -1073,7 +1231,7 @@ async function handleMessage(sock, msg) {
     const input = text.slice(start).trim();
 
     if (!input || !input.includes('|')) {
-      await sendText(jid, '❌ Uso: `!flashcard pregunta | respuesta`\n\nEjemplo:\n!flashcard ¿Qué es el encaje bancario? | Reserva obligatoria en el BCRP, 4-6% de depósitos');
+      await sendText(jid, '❌ Uso: `!flashcard pregunta | respuesta`');
       return;
     }
 
@@ -1088,7 +1246,7 @@ async function handleMessage(sock, msg) {
     try {
       const id = await createFlashcard(jid, question.trim(), answer);
       await humanDelay();
-      await sendText(jid, `🎴 Flashcard #${id} guardada\n\n*P:* ${question.trim()}\n*R:* ${answer}`);
+      await sendText(jid, `🎴 Flashcard #${id} guardada`);
     } catch (err) {
       console.error('Error creando flashcard:', err.message);
       await sendText(jid, '❌ No pude guardar la flashcard.');
@@ -1101,7 +1259,7 @@ async function handleMessage(sock, msg) {
       const cards = await getFlashcards(jid);
       if (cards.length === 0) {
         await humanDelay();
-        await sendText(jid, '✨ No tienes flashcards todavía, mi amor.\n\nCrea una con:\n`!flashcard pregunta | respuesta`');
+        await sendText(jid, '✨ No tienes flashcards todavía.\n\nCrea una con:\n`!flashcard pregunta | respuesta`');
         return;
       }
       const stats = await getFlashcardStats(jid);
@@ -1127,7 +1285,7 @@ async function handleMessage(sock, msg) {
 
   if (lower === '!quiz' || lower === '!examen' || lower.startsWith('!quiz ')) {
     if (hasActiveQuiz(jid)) {
-      await sendText(jid, '⏳ Ya tienes un quiz activo. Respóndelo o escribe `!quiz-stop` para cancelar.');
+      await sendText(jid, '⏳ Ya tienes un quiz activo.');
       return;
     }
     try {
@@ -1140,13 +1298,13 @@ async function handleMessage(sock, msg) {
       const cards = await getRandomFlashcards(jid, count);
       if (cards.length === 0) {
         await humanDelay();
-        await sendText(jid, '✨ No tienes flashcards todavía.\n\nCrea una con:\n`!flashcard pregunta | respuesta`');
+        await sendText(jid, '✨ No tienes flashcards todavía.');
         return;
       }
       startQuiz(jid, cards);
       const q = nextQuestion(jid);
       await humanDelay();
-      await sendText(jid, `📚 *Quiz iniciado — ${cards.length} preguntas*\n\n` + `📝 *Pregunta ${q.index}/${q.total}:*\n${q.flashcard.question}\n\n` + `_Responde cuando quieras. Escribe "pista" si necesitas ayuda o "saltar" para pasar._`);
+      await sendText(jid, `📚 *Quiz iniciado — ${cards.length} preguntas*\n\n` + `📝 *Pregunta ${q.index}/${q.total}:*\n${q.flashcard.question}`);
     } catch (err) {
       console.error('Error iniciando quiz:', err.message);
       await sendText(jid, '❌ No pude iniciar el quiz.');
@@ -1192,7 +1350,7 @@ async function handleMessage(sock, msg) {
 
     const parsed = parseExpense(input);
     if (parsed.error) {
-      await sendText(jid, `❌ ${parsed.error}\n\n*Ejemplos:*\n• \`!gasto 25 almuerzo\`\n• \`!gasto 15.50 taxi\`\n• \`!gasto 30 libro | estudio\``);
+      await sendText(jid, `❌ ${parsed.error}`);
       return;
     }
 
@@ -1219,7 +1377,7 @@ async function handleMessage(sock, msg) {
     for (const e of data.expenses.slice(0, 15)) {
       lines.push(`• *${formatAmount(e.amount)}* — ${e.description} ${formatCategory(e.category)}`);
     }
-    lines.push(`\n💵 *Total: ${formatAmount(data.total)}* (${data.count} gasto${data.count !== 1 ? 's' : ''})`);
+    lines.push(`\n💵 *Total: ${formatAmount(data.total)}*`);
     await sendText(jid, lines.join('\n'));
     return;
   }
@@ -1238,7 +1396,7 @@ async function handleMessage(sock, msg) {
       return;
     }
     const lines = [`💰 *Gastos de la semana*\n`];
-    lines.push(`💵 *Total: ${formatAmount(data.total)}* (${data.count} gastos)\n`);
+    lines.push(`💵 *Total: ${formatAmount(data.total)}*\n`);
     lines.push(`*Por categoría:*`);
     for (const [cat, sum] of Object.entries(data.byCategory).sort((a, b) => b[1] - a[1])) {
       lines.push(`${formatCategory(cat)}: ${formatAmount(sum)}`);
@@ -1261,7 +1419,7 @@ async function handleMessage(sock, msg) {
     }
     const monthName = today.toLocaleDateString('es-PE', { month: 'long', year: 'numeric' });
     const lines = [`💰 *Gastos de ${monthName}*\n`];
-    lines.push(`💵 *Total: ${formatAmount(data.total)}* (${data.count} gastos)\n`);
+    lines.push(`💵 *Total: ${formatAmount(data.total)}*\n`);
     lines.push(`*Por categoría:*`);
     const sorted = Object.entries(data.byCategory).sort((a, b) => b[1] - a[1]);
     for (const [cat, sum] of sorted) {
@@ -1316,7 +1474,6 @@ async function handleMessage(sock, msg) {
       if (relevantes.length > 15) {
         lines.push(`\n_(+${relevantes.length - 15} más)_`);
       }
-      lines.push('\n_Usa `!ping` para probar los 4 proveedores_');
 
       await sendText(jid, lines.join('\n'));
     } catch (err) {
@@ -1393,49 +1550,24 @@ async function handleMessage(sock, msg) {
         const bar = '█'.repeat(Math.round(pctStudy / 10)) + '░'.repeat(10 - Math.round(pctStudy / 10));
         lines.push(`• ${bar} ${pctStudy}%`);
         lines.push(`• Días confirmados: *${study30.studied}/${study30.total}*`);
-        if (pctStudy >= 70) lines.push(`🔥 ¡Ritmo excelente!`);
-        else if (pctStudy >= 40) lines.push(`👍 Buen ritmo, sigue así.`);
-        else lines.push(`💪 A subir ese ritmo, mi amor.`);
       }
       lines.push('');
 
       lines.push(`📝 *Tareas*`);
       lines.push(`• Pendientes: *${tasks.length}*`);
-      if (tasks.length > 0) {
-        const next = tasks[0];
-        const due = next.due_date ? ` — 📅 ${next.due_date}` : '';
-        lines.push(`• Próxima: ${next.title}${due}`);
-      }
       lines.push('');
 
       lines.push(`🎴 *Flashcards*`);
       if (fcStats.total === 0) {
         lines.push(`• Sin tarjetas todavía`);
       } else {
-        const pctFc = Math.round((fcStats.mastered / fcStats.total) * 100);
-        const barFc = '█'.repeat(Math.round(pctFc / 10)) + '░'.repeat(10 - Math.round(pctFc / 10));
-        lines.push(`• ${barFc} ${pctFc}% dominadas`);
-        lines.push(`• Total: ${fcStats.total} (✅ ${fcStats.mastered} · 📖 ${fcStats.toReview})`);
+        lines.push(`• Total: ${fcStats.total} (✅ ${fcStats.mastered})`);
       }
       lines.push('');
 
       lines.push(`💰 *Gastos*`);
-      lines.push(`• Este mes: *${formatAmount(expenseMonth.total)}* (${expenseMonth.count})`);
-      lines.push(`• Esta semana: *${formatAmount(expenseWeek.total)}* (${expenseWeek.count})`);
-
-      if (expenseMonth.count > 0) {
-        const topCat = Object.entries(expenseMonth.byCategory).sort((a, b) => b[1] - a[1])[0];
-        if (topCat) {
-          lines.push(`• Mayor gasto: ${formatCategory(topCat[0])} → ${formatAmount(topCat[1])}`);
-        }
-      }
-      lines.push('');
-
-      lines.push(`💬 *Conversación*`);
-      lines.push(`• Mensajes guardados: ${s.messages}`);
-      lines.push('');
-
-      lines.push('_Usa !stats para detalles, !quiz para practicar_');
+      lines.push(`• Este mes: *${formatAmount(expenseMonth.total)}*`);
+      lines.push(`• Esta semana: *${formatAmount(expenseWeek.total)}*`);
 
       await sendText(jid, lines.join('\n'));
     } catch (err) {
@@ -1615,10 +1747,10 @@ async function handleMessage(sock, msg) {
           const summary = getQuizSummary(jid);
           endQuiz(jid);
           await humanDelay();
-          await sendText(jid, `📊 *Quiz completado*\n\n` + `✅ Correctas: ${summary.correct}/${summary.total}\n` + `📈 Precisión: ${summary.percentage}%\n\n` + (summary.percentage >= 80 ? '🔥 ¡Excelente, mi amor! 💪' : summary.percentage >= 50 ? '👍 Buen intento. Sigue practicando.' : '📚 Necesitas repasar más. ¡Vamos!'));
+          await sendText(jid, `📊 *Quiz completado*\n\n✅ Correctas: ${summary.correct}/${summary.total}\n📈 Precisión: ${summary.percentage}%`);
         } else {
           await humanDelay();
-          await sendText(jid, `❌ La respuesta era:\n*${q.flashcard.answer}*\n\n` + `📝 *Pregunta ${nextQ.index}/${nextQ.total}:*\n${nextQ.flashcard.question}`);
+          await sendText(jid, `❌ La respuesta era:\n*${q.flashcard.answer}*\n\n📝 *Pregunta ${nextQ.index}/${nextQ.total}:*\n${nextQ.flashcard.question}`);
         }
         return;
       }
@@ -1634,12 +1766,11 @@ async function handleMessage(sock, msg) {
         await humanDelay();
         const emoji = result.correct ? '✅' : '❌';
         const feedback = result.correct ? '¡Correcto!' : `La respuesta era:\n*${q.flashcard.answer}*`;
-
-        await sendText(jid, `${emoji} ${feedback}\n\n` + `📊 *Quiz completado*\n` + `✅ Correctas: ${summary.correct}/${summary.total}\n` + `📈 Precisión: ${summary.percentage}%\n\n` + (summary.percentage >= 80 ? '🔥 ¡Excelente, mi amor! 💪' : summary.percentage >= 50 ? '👍 Buen intento. Sigue practicando.' : '📚 Necesitas repasar más. ¡Vamos!'));
+        await sendText(jid, `${emoji} ${feedback}\n\n📊 *Quiz completado*\n✅ Correctas: ${summary.correct}/${summary.total}\n📈 Precisión: ${summary.percentage}%`);
       } else {
         await humanDelay();
         const feedback = result.correct ? '✅ ¡Correcto!' : `❌ La respuesta era:\n*${q.flashcard.answer}*`;
-        await sendText(jid, `${feedback}\n\n` + `📝 *Pregunta ${nextQ.index}/${nextQ.total}:*\n${nextQ.flashcard.question}`);
+        await sendText(jid, `${feedback}\n\n📝 *Pregunta ${nextQ.index}/${nextQ.total}:*\n${nextQ.flashcard.question}`);
       }
       return;
     }
@@ -1716,9 +1847,7 @@ async function handlePing(jid) {
  * ============================================================ */
 async function handleMessageQueued(sock, msg) {
   const jid = msg.key?.remoteJid;
-  if (!jid) {
-    return handleMessage(sock, msg);
-  }
+  if (!jid) return handleMessage(sock, msg);
   return enqueueForUser(jid, () => handleMessage(sock, msg));
 }
 
